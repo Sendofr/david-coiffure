@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="theme-color" content="#121310"/>
+  <meta name="description" content="David Coiffure, salón de peluquería en Encarnación. Color, rubios, cortes y estilismo. Consultá tu turno por WhatsApp."/>
+  <title>David Coiffure | Belleza con identidad</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="./styles.css"/>
+</head>
+<body>
+  <div id="site-view">
+    <div class="topline"><span>ENCARNACIÓN · PARAGUAY</span><span>EL ARTE DE TRANSFORMARTE</span><span>VILLARRICA CASI AVDA. FRANCIA</span></div>
+    <header class="site-header">
+      <a href="#inicio" class="wordmark" aria-label="David Coiffure Inicio">DAVID<span>COIFFURE</span></a>
+      <nav class="main-nav" aria-label="Principal">
+        <a href="#filosofia">Nosotros</a><a href="#servicios">Servicios</a><a href="#galeria">Galería</a><a href="#contacto">Contacto</a><a href="#reservar" class="mobile-nav-action">Reservar cita ↗</a><button type="button" class="mobile-nav-action" id="mobile-nav-admin">Acceso equipo ↗</button>
+      </nav>
+      <div class="header-actions"><button class="btn-link" id="open-admin">Acceso equipo ↗</button><a class="pill-button tiny" href="#reservar">RESERVAR CITA <span>↗</span></a></div>
+      <button id="mobile-menu" class="mobile-menu" aria-label="Abrir menú">☰</button>
+    </header>
+    <div class="mobile-shortcuts" aria-label="Accesos rápidos"><a href="#reservar" class="mobile-shortcut-book">Reservar cita ↗</a><button type="button" id="mobile-quick-admin" class="mobile-shortcut-team">Acceso equipo ↗</button></div>
+    <main>
+      <section id="inicio" class="hero">
+        <div class="hero-photo" aria-hidden="true"></div><div class="hero-shade"></div>
+        <div class="hero-content">
+          <p class="eyebrow light"><span class="hairline"></span> BEAUTY, ART & EXPRESSION</p>
+          <h1>Tu belleza,<br/><em>nuestra pasión.</em></h1>
+          <p class="hero-text">Cada detalle cuenta. Descubrí una nueva forma de sentirte vos, con el cuidado y el estilo que merecés.</p>
+          <div class="hero-buttons"><a href="#reservar" class="pill-button cream">SOLICITAR TURNO <span>↗</span></a><a href="#galeria" class="ghost-link">EXPLORAR TRABAJOS <span>↗</span></a></div>
+        </div>
+        <div class="hero-bottom"><span>01 / DAVID COIFFURE</span><span>SCROLL TO EXPLORE ↓</span></div>
+      </section>
+      <section class="intro" id="filosofia">
+        <div class="section-kicker">EL SALÓN <span class="slash">/</span> NUESTRA ESENCIA</div>
+        <div class="intro-grid">
+          <h2>El estilo es una<br/><em>forma de ser.</em></h2>
+          <div><p>En David Coiffure, cada visita es una invitación a renovar tu imagen. Trabajamos con atención a los detalles, escuchando lo que buscás y acompañándote en cada cambio.</p><p class="small-note">Conocé nuestros servicios y consultá las opciones ideales para vos.</p><a href="#servicios" class="underline-link">CONOCER SERVICIOS <span>↗</span></a></div>
+        </div>
+      </section>
+      <section id="servicios" class="services-section">
+        <div class="section-header"><div><p class="section-kicker">01 / LO QUE HACEMOS</p><h2>Servicios para <em>brillar.</em></h2></div><p>Desde un cambio sutil hasta una transformación completa: cada look empieza con una conversación.</p></div>
+        <div id="service-grid" class="service-grid"></div>
+      </section>
+      <section class="signature-band"><p>BE YOUR OWN KIND OF BEAUTIFUL</p><span>✦</span><p>DAVID COIFFURE</p></section>
+      <section id="galeria" class="gallery-section"><div class="section-header"><div><p class="section-kicker">02 / INSPIRACIÓN</p><h2>La belleza <em>en detalle.</em></h2></div><p>Imágenes de inspiración para la demo. La galería oficial se completará con fotografías autorizadas del salón.</p></div><div class="gallery-grid">
+        <div class="gallery-image g1"><span>COLOR & LUZ</span></div><div class="gallery-image g2"><span>CORTES</span></div><div class="gallery-image g3"><span>ESTILO</span></div>
+      </div></section>
+      <section id="reservar" class="book-section">
+        <div class="book-intro"><p class="section-kicker">03 / TU MOMENTO</p><h2>Reservá tu <em>próxima visita.</em></h2><p>Contanos qué servicio te gustaría realizar. Prepararemos tu solicitud de turno y podrás enviarla directamente por WhatsApp.</p><div class="booking-note">✦ El horario solicitado queda sujeto a confirmación del salón.</div></div>
+        <form id="booking-form" class="booking-form">
+          <label>¿Qué servicio te interesa?<select name="service" id="booking-service" required><option value="">Seleccioná un servicio</option></select></label>
+          <div class="form-row"><label>Fecha de preferencia<input type="date" name="date" id="booking-date" required/></label><label>Horario preferido<select name="time" required id="booking-time"><option value="">Elegí un horario</option></select></label></div>
+          <div class="form-row"><label>Tu nombre<input name="name" required maxlength="100" placeholder="Nombre y apellido"/></label><label>WhatsApp<input name="phone" required maxlength="30" placeholder="09XX XXX XXX"/></label></div>
+          <label>Contanos un poco más (opcional)<textarea name="notes" rows="3" maxlength="400" placeholder="Ej. cabello largo, cambio de color, consulta previa..."></textarea></label>
+          <button type="submit" class="pill-button dark full">SOLICITAR POR WHATSAPP <span>↗</span></button>
+          <p class="form-disclaimer">No se confirma ni guarda un turno en este formulario. Al continuar, se abre WhatsApp con tu solicitud.</p>
+        </form>
+      </section>
+      <section id="contacto" class="contact-section"><div><p class="section-kicker">04 / ENCONTRANOS</p><h2>Te esperamos <em>en el salón.</em></h2></div><div class="contact-details"><div><span>DIRECCIÓN</span><p>Villarrica casi Avenida Francia<br/>Encarnación, Paraguay</p><a href="https://www.google.com/maps/search/?api=1&query=David+Coiffure+Encarnacion+Paraguay" target="_blank" rel="noopener">CÓMO LLEGAR ↗</a></div><div><span>HORARIOS</span><p>Lunes a viernes<br/>13:00 a 20:00 hs<br/>Sábados · 10:00 a 20:00 hs</p></div><div><span>CONTACTO</span><p>+595 985 499769</p><a href="https://wa.me/595985499769" target="_blank" rel="noopener">WHATSAPP ↗</a><br/><a href="https://www.instagram.com/david_coiffure/" target="_blank" rel="noopener">INSTAGRAM ↗</a></div></div></section>
+    </main>
+    <footer class="site-footer"><div class="footer-brand">DAVID <i>COIFFURE</i></div><div><span>ENCARNACIÓN, PARAGUAY</span><span>© <span id="year"></span> DAVID COIFFURE · PROPUESTA DIGITAL</span><a href="#" id="footer-admin">ACCESO EQUIPO ↗</a></div></footer>
+    <a class="wa-float" href="https://wa.me/595985499769" target="_blank" rel="noopener" aria-label="Consultar por WhatsApp"><img src="https://cdn.simpleicons.org/whatsapp/FFFFFF" width="29" height="29" alt="" aria-hidden="true"/></a>
+  </div>
+  <div id="admin-view" hidden>
+    <aside class="sidebar"><div class="sidebar-brand">D<span>·</span><small>COIFFURE<br/>STUDIO</small></div><div class="sidebar-caption">GESTIÓN DEL SALÓN</div><nav id="admin-nav" aria-label="Panel de administración"></nav><div class="sidebar-foot"><span id="mode-label">MODO DEMOSTRACIÓN</span><button id="back-site">← Ver sitio público</button></div></aside>
+    <div class="admin-body"><header class="admin-top"><div><button class="mobile-admin-toggle" id="mobile-admin-toggle">☰</button><span class="admin-breadcrumb">DAVID COIFFURE <span>/</span> <strong id="admin-current-name">Resumen</strong></span></div><div class="admin-top-right"><span class="live-badge"><i></i> <span id="connection-status">Datos de ejemplo</span></span><button id="connection-button" class="admin-connection">Conectar Supabase</button><div class="avatar">DC</div></div></header><main id="admin-content" class="admin-content"></main></div>
+  </div>
+  <div id="modal-backdrop" class="modal-backdrop" hidden><div class="modal"><div class="modal-head"><h3 id="modal-title"></h3><button id="modal-close" aria-label="Cerrar">×</button></div><div id="modal-body"></div></div></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="./config.js"></script><script src="./app.js"></script>
+</body>
+</html>
