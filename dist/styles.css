@@ -77,3 +77,9 @@
   .sidebar{overflow-y:auto;overscroll-behavior:contain}
   .sidebar-foot{margin-top:18px;flex-shrink:0}
 }
+/* Grid children must shrink so administrative tables scroll inside their panel. */
+.dashboard-columns>.panel,.metric-card{min-width:0}
+.metric-value{overflow-wrap:anywhere}
+.admin-top>div:first-child{min-width:0}
+.admin-top-right{flex-shrink:0}
+@media(max-width:760px){.insight-banner{flex-wrap:wrap}.admin-breadcrumb{overflow-wrap:anywhere}}

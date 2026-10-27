@@ -6,8 +6,9 @@ const escapeHTML=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;"
 const money=n=>n==null||n===""?"A consultar":new Intl.NumberFormat("es-PY").format(Number(n))+" Gs.";
 const fmtDate=d=>{if(!d)return"—";const p=String(d).split("-");return p.length===3?p[2]+"/"+p[1]+"/"+p[0]:d};
 const monthLabel=m=>{const d=new Date(m+"-01T12:00:00");return d.toLocaleDateString("es-PY",{month:"long",year:"numeric"})};
-const today=()=>{let x=new Date();return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")};
-const addDays=n=>{let x=new Date();x.setDate(x.getDate()+n);return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")};
+// Calendar dates are business dates in Paraguay, independent of browser timezone.
+const today=()=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/Asuncion",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+const addDays=n=>{const d=new Date(today()+"T12:00:00Z");d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
 const id=()=>crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random());
 const stamp=(text,params)=>text.replace(/\{(\w+)\}/g,(_,key)=>escapeHTML(params[key]??""));
 const serviceImages=[
@@ -27,7 +28,7 @@ const baseServices=[
  {id:"s7",name:"Semirrecogidos",category:"STYLING",duration_minutes:60,price_gs:null,active:true}
 ];
 const seeded=()=>({
- services:baseServices,staff:[{id:"p1",name:"Profesional demo A",specialty:"Coloración",active:true},{id:"p2",name:"Profesional demo B",specialty:"Corte y estilismo",active:true},{id:"p3",name:"Profesional demo C",specialty:"Maquillaje",active:true}],
+ services:baseServices.map(s=>({...s})),staff:[{id:"p1",name:"Profesional demo A",specialty:"Coloración",active:true},{id:"p2",name:"Profesional demo B",specialty:"Corte y estilismo",active:true},{id:"p3",name:"Profesional demo C",specialty:"Maquillaje",active:true}],
  clients:[{id:"c1",name:"Clienta de ejemplo 01",phone:"000000001",email:"",notes:"Datos ficticios"},{id:"c2",name:"Clienta de ejemplo 02",phone:"000000002",email:"",notes:"Datos ficticios"}],
  appointments:[{id:"a1",client_name:"Clienta de ejemplo 01",client_phone:"000000001",service_id:"s1",staff_id:"p1",appointment_date:addDays(1),start_time:"14:00",end_time:"16:00",status:"confirmado",notes:"Cita ilustrativa"},{id:"a2",client_name:"Clienta de ejemplo 02",client_phone:"000000002",service_id:"s2",staff_id:"p2",appointment_date:addDays(2),start_time:"15:00",end_time:"16:00",status:"pendiente",notes:"Cita ilustrativa"}],
  products:[{id:"pr1",name:"Color profesional · tono 7.1",sku:"DEMO-COL-071",category:"Consumible",unit:"tubo",stock_qty:4,min_qty:6,cost_gs:40000,sale_price_gs:null,active:true},{id:"pr2",name:"Oxidante profesional",sku:"DEMO-OXI-01",category:"Consumible",unit:"ml",stock_qty:850,min_qty:500,cost_gs:25,sale_price_gs:null,active:true},{id:"pr3",name:"Shampoo cuidado color",sku:"DEMO-SHP-01",category:"Venta",unit:"unidad",stock_qty:9,min_qty:4,cost_gs:65000,sale_price_gs:110000,active:true},{id:"pr4",name:"Mascarilla reparación",sku:"DEMO-MAS-01",category:"Consumible",unit:"g",stock_qty:190,min_qty:250,cost_gs:90,sale_price_gs:null,active:true}],
@@ -36,15 +37,34 @@ const seeded=()=>({
  expenses:[{id:"expense-demo-1",expense_date:today(),category:"Operativo",description:"Gasto ilustrativo del salón",amount_gs:65000,created_at:new Date().toISOString()}]
 });
 const demoKey="david-coiffure-demo-v1";
-let state;try{state=JSON.parse(localStorage.getItem(demoKey))||seeded()}catch{state=seeded()}
-state.sales=state.sales||[];state.expenses=state.expenses||[];
+const emptyState=()=>({services:[],staff:[],clients:[],appointments:[],products:[],stock_movements:[],sales:[],expenses:[]});
+let runtimeConfig={};try{runtimeConfig=JSON.parse(localStorage.getItem("david-supabase-config"))||{}}catch{}
+let settings=window.DavidAuth.resolveConfig(window.DAVID_CONFIG,runtimeConfig);
+const isLive=()=>settings.mode==="production";
+function readDemo(){
+ try{
+  const saved=JSON.parse(localStorage.getItem(demoKey));
+  // Preserve demo records from the release before sales/expenses were added.
+  if(saved&&["services","staff","clients","appointments","products","stock_movements"].every(k=>Array.isArray(saved[k])))
+   return {...saved,sales:Array.isArray(saved.sales)?saved.sales:[],expenses:Array.isArray(saved.expenses)?saved.expenses:[]};
+ }catch{}
+ return seeded();
+}
+let state=isLive()?emptyState():readDemo();
+let publicCatalog=isLive()?[]:state.services;
 const persist=()=>{if(!isLive())localStorage.setItem(demoKey,JSON.stringify(state))};
 let page="dashboard",search="",filter="todos",userProfile=null,reportMonth=today().slice(0,7);
-let settings;try{settings=JSON.parse(localStorage.getItem("david-supabase-config"))||{}}catch{settings={}}
-settings.url=settings.url||window.DAVID_CONFIG?.supabaseUrl||"";
-settings.key=settings.key||window.DAVID_CONFIG?.supabasePublishableKey||"";
-let session;try{session=JSON.parse(localStorage.getItem("david-auth-session"))||null}catch{session=null}
-const isLive=()=>Boolean(settings.url&&settings.key);
+let session=null,client=null,authSubscription=null,generation=0,loadSequence=0,loading=false,liveError="";
+let clientReady=Promise.resolve();
+// Discard the legacy hand-rolled session; the SDK owns refresh and storage.
+localStorage.removeItem("david-auth-session");
+const pendingForms=new WeakSet();
+async function submitOnce(form,action){
+ if(pendingForms.has(form))return;
+ pendingForms.add(form);const buttons=[...form.querySelectorAll('button[type="submit"]')];buttons.forEach(b=>b.disabled=true);
+ try{return await action()}finally{pendingForms.delete(form);buttons.forEach(b=>b.disabled=false)}
+}
+function clearPrivateState(){generation++;loadSequence++;state=emptyState();userProfile=null;loading=false;page="dashboard";search="";closeModal()}
 const toast=msg=>{const t=$("#toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3100)};
 const modal=(title,body)=>{$("#modal-title").textContent=title;$("#modal-body").innerHTML=body;$("#modal-backdrop").hidden=false};
 const closeModal=()=>{$("#modal-backdrop").hidden=true;$("#modal-body").innerHTML=""};
@@ -55,9 +75,10 @@ $("#mobile-menu").setAttribute("aria-expanded","false");
 $("#mobile-menu").onclick=()=>{const open=$(".main-nav").classList.toggle("open");$("#mobile-menu").setAttribute("aria-expanded",String(open))};
 $$(".main-nav a").forEach(a=>a.addEventListener("click",()=>{$(".main-nav").classList.remove("open");$("#mobile-menu").setAttribute("aria-expanded","false")}));
 function publicServices(){
- const grid=$("#service-grid");const items=state.services.filter(s=>s.active!==false).slice(0,6);
+ const catalog=isLive()?publicCatalog:state.services;
+ const grid=$("#service-grid");const items=catalog.filter(s=>s.active!==false).slice(0,6);
  grid.innerHTML=items.map((s,i)=>'<a class="service-tile" href="#reservar" style="--photo:url(&quot;'+serviceImages[i%serviceImages.length]+'&quot;)"><small>0'+(i+1)+' / '+escapeHTML(s.category||"ESTILO")+'</small><h3>'+escapeHTML(s.name)+'</h3><div class="tile-bottom"><span>CONSULTAR SERVICIO</span><span class="round-arrow">↗</span></div></a>').join("");
- $("#booking-service").innerHTML='<option value="">Seleccioná un servicio</option>'+state.services.filter(s=>s.active!==false).map(s=>'<option value="'+escapeHTML(s.id)+'">'+escapeHTML(s.name)+'</option>').join("");
+ $("#booking-service").innerHTML='<option value="">Seleccioná un servicio</option>'+catalog.filter(s=>s.active!==false).map(s=>'<option value="'+escapeHTML(s.id)+'">'+escapeHTML(s.name)+'</option>').join("");
 }
 const dateField=$("#booking-date");dateField.min=today();dateField.value=addDays(1);
 function updateTimeOptions(){
@@ -70,7 +91,7 @@ function updateTimeOptions(){
 }
 dateField.onchange=updateTimeOptions;updateTimeOptions();publicServices();
 $("#booking-form").onsubmit=e=>{
- e.preventDefault();const f=new FormData(e.currentTarget),s=state.services.find(x=>x.id===f.get("service"));
+ e.preventDefault();const f=new FormData(e.currentTarget),s=(isLive()?publicCatalog:state.services).find(x=>x.id===f.get("service"));
  if(!s)return toast("Seleccioná un servicio");
  const lines=["Hola David Coiffure, quisiera consultar disponibilidad para un turno.","Servicio: "+s.name,"Fecha: "+fmtDate(f.get("date")),"Horario de preferencia: "+f.get("time")+" hs","Nombre: "+f.get("name"),"Teléfono: "+f.get("phone")];
  if(f.get("notes"))lines.push("Observaciones: "+f.get("notes"));
@@ -87,11 +108,11 @@ function adminNav(){
  $$("#admin-nav button").forEach(b=>b.onclick=()=>{page=b.dataset.page;search="";filter="todos";renderAdmin();$(".sidebar").classList.remove("open")});
  $("#admin-current-name").textContent=navItems.find(x=>x[0]===page)?.[1]||"Resumen";
  $("#mode-label").textContent=isLive()?"SUPABASE · DATOS REALES":"MODO DEMOSTRACIÓN";
- $("#connection-status").textContent=isLive()?(session?"Supabase conectado":"Supabase sin sesión"):"Datos de ejemplo";
+ $("#connection-status").textContent=isLive()?(settings.error?"Configuración pendiente":session?"Sesión Supabase":"Supabase sin sesión"):"Datos de ejemplo";
  $("#connection-button").textContent=isLive()?"Gestionar conexión":"Conectar Supabase";
 }
 $("#mobile-admin-toggle").onclick=()=>$(".sidebar").classList.toggle("open");
-function showAdmin(){ $(".sidebar").classList.remove("open");$(".main-nav").classList.remove("open");$("#mobile-menu").setAttribute("aria-expanded","false");$("#site-view").hidden=true;$("#admin-view").hidden=false;window.scrollTo(0,0);adminNav();if(isLive())loadLive();else renderAdmin() }
+function showAdmin(){ $(".sidebar").classList.remove("open");$(".main-nav").classList.remove("open");$("#mobile-menu").setAttribute("aria-expanded","false");$("#site-view").hidden=true;$("#admin-view").hidden=false;window.scrollTo(0,0);adminNav();renderAdmin();if(isLive())clientReady.then(()=>loadLive(true)) }
 function showSite(){ $(".sidebar").classList.remove("open");$("#site-view").hidden=false;$("#admin-view").hidden=true;window.scrollTo(0,0);publicServices() }
 $("#open-admin").onclick=showAdmin;$("#footer-admin").onclick=e=>{e.preventDefault();showAdmin()};
 $("#mobile-quick-admin").onclick=showAdmin;$("#mobile-nav-admin").onclick=showAdmin;
@@ -121,6 +142,7 @@ function makeSKU(){
 }
 function metric(label,value,caption,icon){return '<div class="metric-card"><div class="metric-top"><span>'+label+'</span><span class="metric-icon">'+icon+'</span></div><div class="metric-value">'+value+'</div><div class="metric-sub">'+caption+'</div></div>'}
 function renderDashboard(){
+ if(isLive()&&userProfile?.role==="stylist")return title("Mi agenda","Solo citas asignadas a tu perfil. Zona horaria: America/Asuncion.")+renderAppointments();
  const upcoming=[...state.appointments].filter(a=>a.appointment_date>=today()&&a.status!=="cancelado").sort((a,b)=>(a.appointment_date+a.start_time).localeCompare(b.appointment_date+b.start_time)).slice(0,6);
  const rows=upcoming.map(a=>'<tr>'+td(fmtDate(a.appointment_date)+" · "+escapeHTML(a.start_time),"strong-cell")+td(escapeHTML(a.client_name))+td(escapeHTML(serviceName(a.service_id)))+td(status(a.status))+'</tr>');
  const alert=lowStock().slice(0,5).map(p=>'<div class="alert-item"><div><strong>'+escapeHTML(p.name)+'</strong><span>'+escapeHTML(p.sku)+" · Mínimo "+escapeHTML(p.min_qty)+" "+escapeHTML(p.unit)+'</span></div><span class="alert-qty">'+escapeHTML(p.stock_qty)+" "+escapeHTML(p.unit)+'</span></div>').join("");
@@ -183,9 +205,10 @@ function renderSettings(){
  return title("Configuración","Conexión, seguridad y datos del salón.")+panel("Estado de la plataforma",'<div class="kpi-row"><span>Modo actual</span><strong>'+(isLive()?"Supabase":"Demostración local")+'</strong></div><div class="kpi-row"><span>Datos administrativos</span><strong>'+(isLive()?"Controlados por RLS":"Ficticios en navegador")+'</strong></div><div class="kpi-row"><span>Contacto público</span><strong>+595 985 499769</strong></div><div class="kpi-row"><span>Reservas desde la web</span><strong>Solicitud por WhatsApp</strong></div><div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:23px"><button class="admin-action" data-action="connect">'+(isLive()?"Administrar Supabase":"Conectar Supabase")+'</button>'+(isLive()?'<button class="admin-outline" data-action="logout">Cerrar sesión</button>':'<button class="admin-outline" data-action="reset-demo">Restaurar datos demo</button>')+'</div>')+'<div class="admin-footer-note">Importante: esta versión no genera comprobantes tributarios, no cobra online ni envía recordatorios automáticos. La solicitud pública por WhatsApp no bloquea ningún turno.</div>';
 }
 function renderAdmin(){
+ if(isLive()&&!canWrite()&&!["dashboard","appointments","services","staff","settings"].includes(page))page="dashboard";
  $("#admin-view").classList.toggle("admin-readonly",!canWrite());
  adminNav();
- if(isLive()&&!userProfile){$("#admin-content").innerHTML=title("Acceso protegido","Iniciá sesión con tu usuario autorizado.")+panel("Conectar al panel",'<div class="empty">Para administrar información real es necesario iniciar sesión y tener un perfil habilitado. <br/><br/><button class="admin-action" data-action="connect">Iniciar sesión</button></div>');wireActions();return}
+ if(isLive()&&(loading||!userProfile)){$("#admin-content").innerHTML=title(loading?"Cargando datos…":"Acceso protegido",loading?"Comprobando sesión y permisos.":"Iniciá sesión con tu usuario autorizado.")+panel("Conectar al panel",'<div class="empty">'+escapeHTML(liveError||settings.error||"Para administrar información real es necesario iniciar sesión y tener un perfil habilitado.")+'<br/><br/><button class="admin-action" data-action="connect">'+(session?"Reintentar acceso":"Iniciar sesión")+'</button>'+(session?'<button class="admin-outline" data-action="logout">Cerrar sesión</button>':"")+'</div>');wireActions();return}
  const components={dashboard:renderDashboard,appointments:renderAppointments,clients:renderClients,services:renderServices,inventory:renderInventory,movements:renderMovements,sales:renderSales,expenses:renderExpenses,profits:renderProfits,staff:renderStaff,settings:renderSettings};
  $("#admin-content").innerHTML=(components[page]||renderDashboard)()+(page==="dashboard"&&canWrite()?renderFinancialOverview():"")+'<p class="admin-footer-note">'+(isLive()?"Datos del proyecto Supabase. El acceso y los cambios están sujetos a permisos de usuario.":"MODO DEMO · Información y personas ficticias. Los cambios solo se conservan en este navegador.")+'</p>';
  wireActions();
@@ -193,11 +216,11 @@ function renderAdmin(){
 function wireActions(){
  $$("#admin-content [data-action]").forEach(b=>b.onclick=()=>{
  const a=b.dataset.action;
- if(a==="connect")connectionDialog();
+ if(a==="connect"){if(isLive())clientReady.then(()=>loadLive(true));else connectionDialog()}
  else if(a==="settings"){page="settings";renderAdmin()}
  else if(a==="profits"){page="profits";reportMonth=today().slice(0,7);renderAdmin()}
  else if(a==="logout")logout();
- else if(a==="reset-demo"){if(confirm("¿Restaurar todos los datos ficticios?")){state=seeded();persist();renderAdmin();toast("Demo restaurada.")}}
+ else if(a==="reset-demo"&&!isLive()){if(confirm("¿Restaurar todos los datos ficticios?")){state=seeded();persist();renderAdmin();toast("Demo restaurada.")}}
  else if(a==="new-movement")movementDialog();
  else if(a==="new-sale")saleDialog();
  else if(a.startsWith("new-"))editDialog(a.slice(4));
@@ -212,6 +235,7 @@ const input=(name,label,value="",type="text",attrs="")=>'<div class="form-field"
 const select=(name,label,options,current)=>'<div class="form-field"><label for="field-'+name+'">'+label+'</label><select id="field-'+name+'" name="'+name+'">'+options.map(([v,l])=>'<option value="'+escapeHTML(v)+'" '+(String(v)===String(current)?"selected":"")+'>'+escapeHTML(l)+'</option>').join("")+'</select></div>';
 const textArea=(name,label,value="")=>'<div class="form-field wide"><label for="field-'+name+'">'+label+'</label><textarea id="field-'+name+'" name="'+name+'" rows="2">'+escapeHTML(value)+'</textarea></div>';
 function editDialog(type,recordId){
+ if(!canWrite())return toast("No tenés permiso para modificar estos datos.");
  const record=recordId?state[type].find(x=>String(x.id)===String(recordId)):{};
  if(!record){toast("Registro no encontrado.");return}
  const r=record,opts=state.services.map(s=>[s.id,s.name]),pros=[["","Sin asignar"],...state.staff.filter(x=>x.active!==false).map(s=>[s.id,s.name])];
@@ -233,7 +257,7 @@ function editDialog(type,recordId){
  $("#cancel-edit").onclick=closeModal;
  const gen=$("#generate-sku");if(gen)gen.onclick=()=>{try{$("#field-sku").value=makeSKU();toast("Código generado. También podés editarlo.")}catch(err){toast(err.message)}};
  $("#edit-form").onsubmit=async e=>{
- e.preventDefault();const body=Object.fromEntries(new FormData(e.currentTarget).entries());
+ e.preventDefault();if(pendingForms.has(e.currentTarget))return;const body=Object.fromEntries(new FormData(e.currentTarget).entries());
  if(type==="appointments"){
  const s=state.services.find(x=>x.id===body.service_id);
  const [hh,mm]=body.start_time.split(":").map(Number);const total=hh*60+mm+Number(s?.duration_minutes||60);
@@ -255,18 +279,20 @@ function editDialog(type,recordId){
  if(type==="services"){body.duration_minutes=Number(body.duration_minutes);body.price_gs=body.price_gs===""?null:Number(body.price_gs);body.active=body.active==="true"}
  if(type==="staff")body.active=body.active==="true";
  if(type==="expenses"){body.amount_gs=Number(body.amount_gs);if(!(body.amount_gs>0)){toast("El importe debe ser mayor que cero.");return}}
- try{await saveRecord(type,recordId,body);closeModal();toast("Cambios guardados.");renderAdmin();if(type==="services")publicServices()}catch(err){toast("Error: "+err.message)}
+ try{await submitOnce(e.currentTarget,()=>saveRecord(type,recordId,body));closeModal();toast("Cambios guardados.");renderAdmin();if(type==="services")publicServices()}catch(err){toast("Error: "+err.message)}
  };
 }
 function movementDialog(productId){
+ if(!canWrite())return toast("No tenés permiso para movimientos.");
  const products=state.products; if(!products.length)return toast("Primero creá un producto.");
  modal("Registrar movimiento de stock",'<div class="modal-note">Para vender un producto usá Ventas: descontará stock y registrará el ingreso y el costo al mismo tiempo.</div><form id="movement-form"><div class="form-stack">'+select("product_id","Producto",products.map(p=>[p.id,p.name+" ("+p.stock_qty+" "+p.unit+")"]),productId||products[0].id)+select("kind","Tipo",[["entrada","Entrada de mercadería"],["consumo","Consumo por servicio"],["ajuste_positivo","Ajuste positivo"],["ajuste_negativo","Ajuste negativo"]],"entrada")+input("quantity","Cantidad positiva",1,"number","min=0.001 step=any required")+textArea("note","Motivo o referencia","")+'</div><div class="modal-footer"><button class="admin-outline" type="button" id="cancel-movement">Cancelar</button><button class="admin-action" type="submit">Registrar movimiento</button></div></form>');
  $("#cancel-movement").onclick=closeModal;
- $("#movement-form").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);const quantity=Number(f.get("quantity"));if(!(quantity>0))return toast("Indicá una cantidad válida.");const kind=f.get("kind");const delta=["entrada","ajuste_positivo"].includes(kind)?quantity:-quantity;
- try{await recordMovement({product_id:f.get("product_id"),kind,delta_qty:delta,note:f.get("note")});closeModal();toast("Movimiento registrado.");renderAdmin()}catch(err){toast("Error: "+err.message)}
+ $("#movement-form").onsubmit=async e=>{e.preventDefault();if(pendingForms.has(e.currentTarget))return;const f=new FormData(e.currentTarget);const quantity=Number(f.get("quantity"));if(!(quantity>0))return toast("Indicá una cantidad válida.");const kind=f.get("kind");const delta=["entrada","ajuste_positivo"].includes(kind)?quantity:-quantity;
+ try{await submitOnce(e.currentTarget,()=>recordMovement({product_id:f.get("product_id"),kind,delta_qty:delta,note:f.get("note")}));closeModal();toast("Movimiento registrado.");renderAdmin()}catch(err){toast("Error: "+err.message)}
  };
 }
 function saleDialog(){
+ if(!canWrite())return toast("No tenés permiso para ventas.");
  const goods=state.products.filter(p=>p.category==="Venta"&&p.active!==false);
  const services=state.services.filter(s=>s.active!==false);
  if(!goods.length&&!services.length)return toast("Primero cargá algún producto o servicio.");
@@ -291,45 +317,46 @@ function saleDialog(){
  [qty,price,cost].forEach(el=>el.oninput=()=>syncSale(false));
  syncSale(true);
  $("#sale-form").onsubmit=async e=>{
-  e.preventDefault();
+  e.preventDefault();if(pendingForms.has(e.currentTarget))return;
   const form=new FormData(e.currentTarget),kind=form.get("kind"),quantity=Number(form.get("quantity")),unit_price_gs=Number(form.get("unit_price_gs")),unit_cost_gs=Number(form.get("unit_cost_gs"));
   if(!(quantity>0)||!Number.isFinite(unit_price_gs)||unit_price_gs<0||!Number.isFinite(unit_cost_gs)||unit_cost_gs<0){toast("Revisá la cantidad, precio y costo.");return}
   const product=goods.find(x=>x.id===form.get("product_id"));
   if(kind==="producto"&&(!product||quantity>Number(product.stock_qty))){toast("No hay stock suficiente para esa venta.");return}
   if(kind==="servicio"&&!form.get("service_id")){toast("Elegí un servicio.");return}
   const data={kind,product_id:kind==="producto"?form.get("product_id"):null,service_id:kind==="servicio"?form.get("service_id"):null,sale_date:form.get("sale_date"),quantity,unit_price_gs,unit_cost_gs,payment_method:form.get("payment_method"),customer_name:form.get("customer_name")||null,notes:form.get("notes")||null};
-  try{await registerSale(data);reportMonth=String(data.sale_date).slice(0,7);closeModal();toast("Venta registrada y resultado actualizado.");page="sales";renderAdmin()}catch(err){toast("Error: "+err.message)}
+  try{await submitOnce(e.currentTarget,()=>registerSale(data));reportMonth=String(data.sale_date).slice(0,7);closeModal();toast("Venta registrada y resultado actualizado.");page="sales";renderAdmin()}catch(err){toast("Error: "+err.message)}
  };
 }
-async function authCall(endpoint,payload){
- const response=await fetch(settings.url.replace(/\/$/,"")+"/auth/v1/"+endpoint,{method:"POST",headers:{"Content-Type":"application/json",apikey:settings.key},body:JSON.stringify(payload)});
- const data=await response.json().catch(()=>({}));
- if(!response.ok)throw Error(data.msg||data.error_description||data.message||"Error de autenticación");
+async function apiRequest(path,method="GET",body){
+ if(!isLive()||!client||settings.error)throw Error(settings.error||"Supabase no está configurado.");
+ const token=generation;
+ let query;
+ if(path.startsWith("rpc/"))query=client.rpc(path.slice(4),body);
+ else{
+  const [table,params=""]=path.split("?");const filters=new URLSearchParams(params);
+  query=client.from(table);
+  if(method==="GET")query=query.select(filters.get("select")||"*");
+  else if(method==="PATCH")query=query.update(body);
+  else if(method==="POST")query=query.insert(body);
+  else throw Error("Operación no soportada.");
+  for(const [name,value] of filters){if(name!=="select"&&value.startsWith("eq."))query=query.eq(name,value.slice(3))}
+ }
+ const {data,error,status}=await query;
+ if(token!==generation)throw Error("La sesión cambió. Volvé a consultar los datos.");
+ if(error){
+  if(status===0||status===401||status===403||error.code==="42501"){
+   clearPrivateState();liveError="No se pudo verificar el acceso. Volvé a ingresar y comprobá la conexión.";renderAdmin();
+  }
+  throw error;
+ }
  return data;
-}
-async function refreshSession(){
- if(!session?.refresh_token)throw Error("La sesión expiró. Volvé a ingresar.");
- const s=await authCall("token?grant_type=refresh_token",{refresh_token:session.refresh_token});
- session={...s,expires_at:Date.now()+Number(s.expires_in||3600)*1000};
- localStorage.setItem("david-auth-session",JSON.stringify(session));
-}
-async function apiRequest(path,method="GET",body,returnRows=true){
- if(!isLive())throw Error("Supabase no está configurado.");
- if(session?.expires_at&&Date.now()>session.expires_at-60000)await refreshSession();
- const headers={"apikey":settings.key,"Content-Type":"application/json"};
- if(session?.access_token)headers.Authorization="Bearer "+session.access_token;
- if(method!=="GET")headers.Prefer="return=representation";
- const response=await fetch(settings.url.replace(/\/$/,"")+"/rest/v1/"+path,{method,headers,...(body!==undefined?{body:JSON.stringify(body)}:{})});
- const text=await response.text();let data;try{data=text?JSON.parse(text):null}catch{data=text}
- if(!response.ok)throw Error(typeof data==="object"?(data.message||data.details||data.hint||"Error al consultar Supabase"):String(data||"Error de conexión"));
- return returnRows?data:null;
 }
 async function saveRecord(type,recordId,body){
  if(isLive()){
   if(!userProfile||!["owner","manager"].includes(userProfile.role))throw Error("Tu usuario no tiene permiso para modificar estos datos.");
   const route=type+(recordId?"?id=eq."+encodeURIComponent(recordId):"");
   await apiRequest(route,recordId?"PATCH":"POST",body);
-  await fetchCollections();return;
+  await fetchCollections();if(type==="services")await loadPublicCatalog();return;
  }
  if(recordId){const idx=state[type].findIndex(x=>String(x.id)===String(recordId));state[type][idx]={...state[type][idx],...body}}
  else state[type].push({id:id(),...body});
@@ -370,54 +397,107 @@ async function registerSale(data){
  persist();
 }
 async function fetchCollections(){
- const tables=["services","staff","clients","appointments","products","stock_movements","sales","expenses"];
- const output=await Promise.all(tables.map(x=>apiRequest(x+"?select=*")));
- tables.forEach((x,i)=>state[x]=Array.isArray(output[i])?output[i]:[]);
- publicServices();
-}
-async function loadLive(){
- adminNav();
- if(!session?.access_token){userProfile=null;renderAdmin();connectionDialog("login");return}
+ const token=generation;
+ const tables=userProfile?.role==="stylist"?["services","staff","appointments"]:["services","staff","clients","appointments","products","stock_movements","sales","expenses"];
+ const next=emptyState();
  try{
-  if(session?.expires_at&&Date.now()>session.expires_at-60000)await refreshSession();
-  const uid=session.user?.id;
-  if(!uid)throw Error("El usuario no tiene una sesión válida.");
-  const rows=await apiRequest("profiles?select=id,role,display_name&id=eq."+encodeURIComponent(uid));
-  const profile=Array.isArray(rows)?rows[0]:null;
+  const output=await Promise.all(tables.map(x=>apiRequest(x+"?select=*")));
+  if(token!==generation)throw Error("La sesión cambió.");
+  tables.forEach((x,i)=>next[x]=Array.isArray(output[i])?output[i]:[]);
+  state=next;
+ }catch(error){if(token===generation){clearPrivateState();liveError="No se pudieron actualizar los datos. Comprobá la conexión y volvé a ingresar. Si guardaste una operación, verificá su historial antes de repetirla.";renderAdmin()}throw error}
+}
+async function loadLive(promptLogin=false){
+ if(!isLive())return;
+ if(settings.error||!client){liveError=settings.error||"No se pudo iniciar Supabase.";renderAdmin();return}
+ const seq=++loadSequence,token=generation;
+ loading=true;liveError="";renderAdmin();
+ try{
+  const {data,error}=await client.auth.getSession();if(error)throw error;
+  if(seq!==loadSequence||token!==generation)return;
+  session=data.session;
+  if(!session){userProfile=null;state=emptyState();loading=false;renderAdmin();if(promptLogin)connectionDialog("login");return}
+  const rows=await apiRequest("profiles?select=id,role,display_name,staff_id&id=eq."+encodeURIComponent(session.user.id));
+  if(seq!==loadSequence||token!==generation)return;
+  const profile=rows?.[0];
   if(!profile||!["owner","manager","stylist"].includes(profile.role))throw Error("Esta cuenta no tiene un perfil autorizado. El propietario debe habilitarla en Supabase.");
   userProfile=profile;
   await fetchCollections();
-  renderAdmin();
- }catch(err){userProfile=null;renderAdmin();toast(err.message)}
+  if(seq!==loadSequence||token!==generation)return;
+  loading=false;renderAdmin();
+ }catch(error){if(seq===loadSequence&&token===generation){clearPrivateState();liveError=error.message||"No se pudo verificar el acceso.";renderAdmin();toast(liveError)}}
+}
+async function loadPublicCatalog(){
+ if(!isLive()||!client)return;
+ const token=generation;
+ const {data,error}=await client.from("services").select("id,name,category,duration_minutes,price_gs,active").eq("active",true);
+ if(token!==generation)return;
+ publicCatalog=error?[]:(data||[]);publicServices();
+ if(error)$("#service-grid").textContent="No se pudo cargar el catálogo. Consultá al salón por WhatsApp.";
+}
+async function initializeClient(){
+ if(!isLive())return;
+ try{
+  client=window.DavidAuth.createClient(settings);
+  const activeClient=client;
+  authSubscription=client.auth.onAuthStateChange((event,next)=>{
+   // Do not await SDK calls inside its auth callback (the SDK holds a lock).
+   if(activeClient!==client)return;
+   const previous=session?.user?.id;session=next;
+   if(event==="SIGNED_OUT"||previous&&previous!==next?.user?.id){clearPrivateState();renderAdmin()}
+   if(event==="TOKEN_REFRESHED"){clearPrivateState();renderAdmin()}
+   if(["SIGNED_IN","TOKEN_REFRESHED"].includes(event)&&!$("#admin-view").hidden)setTimeout(()=>{if(client===activeClient)loadLive()},0);
+  }).data.subscription;
+  const {data,error}=await client.auth.getSession();if(error)throw error;
+  if(client!==activeClient)return;
+  session=data.session;
+  loadPublicCatalog().catch(()=>{publicCatalog=[];publicServices()});
+ }catch(error){liveError=error.message;publicCatalog=[];publicServices();renderAdmin()}
 }
 function connectionDialog(view="configure"){
- const address=escapeHTML(settings.url||"");
- const pubkey=escapeHTML(settings.key||"");
+ if(isLive()&&settings.error){modal("Configuración pendiente",'<p class="modal-note">'+escapeHTML(settings.error)+' Configurá las variables públicas y generá config.js según la documentación. El modo producción permanece bloqueado.</p>');return}
+ if(isLive()&&view!=="configure-force")view="login";
  if(view==="login"){
-  modal("Acceso privado · David Coiffure",'<div class="modal-note">El acceso solo es posible con una cuenta creada en Supabase Auth y un perfil autorizado (owner, manager o stylist). No hay usuario ni contraseña de demostración en el sistema real.</div><form id="login-form"><div class="form-stack">'+input("email","Correo del equipo","","email","required autocomplete=username")+input("password","Contraseña","","password","required autocomplete=current-password")+'</div><div class="modal-footer"><button type="button" class="admin-outline" id="edit-config">Configurar conexión</button><button type="submit" class="admin-action">Entrar al panel</button></div></form>');
-  $("#edit-config").onclick=()=>connectionDialog();
+  modal("Acceso privado · David Coiffure",'<div class="modal-note">Ingresá con una cuenta autorizada del salón. La sesión se conserva solo en esta pestaña; cerrá sesión al terminar en equipos compartidos.</div><form id="login-form"><div class="form-stack">'+input("email","Correo del equipo","","email","required autocomplete=username")+input("password","Contraseña","","password","required autocomplete=current-password")+'</div><div class="modal-footer">'+(window.DAVID_CONFIG.mode==="demo"?'<button type="button" class="admin-outline" id="edit-config">Configurar conexión</button>':"")+'<button type="submit" class="admin-action">Entrar al panel</button>'+(session?'<button type="button" class="admin-outline" id="login-logout">Cerrar sesión</button>':"")+'</div></form>');
+  const edit=$("#edit-config");if(edit)edit.onclick=()=>connectionDialog("configure-force");
+  const exit=$("#login-logout");if(exit)exit.onclick=logout;
   $("#login-form").onsubmit=async e=>{
-   e.preventDefault();const d=new FormData(e.currentTarget);
-   try{const s=await authCall("token?grant_type=password",{email:d.get("email"),password:d.get("password")});session={...s,expires_at:Date.now()+Number(s.expires_in||3600)*1000};localStorage.setItem("david-auth-session",JSON.stringify(session));closeModal();await loadLive()}catch(err){toast("No se pudo ingresar: "+err.message)}
+   e.preventDefault();if(pendingForms.has(e.currentTarget))return;const d=new FormData(e.currentTarget);
+   try{await submitOnce(e.currentTarget,async()=>{
+    await clientReady;if(!client)throw Error("No se pudo iniciar Supabase.");
+    const {error}=await client.auth.signInWithPassword({email:String(d.get("email")).trim(),password:String(d.get("password"))});
+    if(error)throw error;closeModal();await loadLive();
+   })}catch(error){toast("No se pudo ingresar: "+error.message)}
   };return;
  }
- modal("Conectar a Supabase",'<div class="modal-note">Primero creá un proyecto en Supabase, ejecutá el archivo <strong>supabase/schema.sql</strong> e invitá a un usuario. Solo necesitás la URL del proyecto y su <strong>clave pública</strong> (publishable/anon). Nunca pegues la service_role ni una clave secreta aquí.</div><form id="config-form"><div class="form-stack">'+input("url","Project URL",address,"url","required placeholder=https://xxxxx.supabase.co")+input("key","Publishable key o anon key",pubkey,"text","required")+'</div><div class="modal-footer">'+(isLive()?'<button id="disconnect" class="admin-outline" type="button">Volver a demo</button>':"")+'<button class="admin-action" type="submit">Guardar y continuar</button></div></form><p style="font-size:10px;color:#87958b;margin-top:18px">Los valores públicos se guardan en este navegador. Para uso definitivo con todo el equipo, configurarlos también en config.js durante el despliegue.</p>');
- const dc=$("#disconnect");if(dc)dc.onclick=()=>{
-  if(!confirm("¿Desconectar Supabase de este navegador y volver a los datos ficticios? Los datos de Supabase no serán eliminados."))return;
-  localStorage.removeItem("david-supabase-config");localStorage.removeItem("david-auth-session");settings={url:"",key:""};session=null;userProfile=null;state=seeded();persist();closeModal();renderAdmin();publicServices();toast("Modo demostración activado.");
+ modal("Conectar a Supabase",'<div class="modal-note">Usá un proyecto de prueba configurado con las migraciones versionadas. Solo URL y clave pública; nunca service_role ni claves secretas. Activar producción oculta todos los datos demo.</div><form id="config-form"><div class="form-stack">'+input("url","Project URL",settings.url||"","url","required placeholder=https://xxxxx.supabase.co")+input("key","Publishable key o anon key",settings.key||"","text","required")+'</div><div class="modal-footer">'+(isLive()?'<button id="disconnect" class="admin-outline" type="button">Volver a demo</button>':"")+'<button class="admin-action" type="submit">Activar producción</button></div></form>');
+ const dc=$("#disconnect");if(dc)dc.onclick=async()=>{
+  if(!confirm("¿Volver a la demostración? Los datos reales no se copian ni se eliminan."))return;
+  await disposeClient();localStorage.removeItem("david-supabase-config");settings=window.DavidAuth.resolveConfig(window.DAVID_CONFIG,{});state=readDemo();publicCatalog=state.services;renderAdmin();publicServices();toast("Modo demostración activado.");
  };
- $("#config-form").onsubmit=e=>{
-  e.preventDefault();const d=new FormData(e.currentTarget);const u=String(d.get("url")).trim().replace(/\/$/,"");
-  if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(u)){toast("Ingresá una URL válida de proyecto Supabase.");return}
-  const key=String(d.get("key")).trim();if(key.length<20){toast("La clave pública parece incompleta.");return}
-  if(key.startsWith("sb_secret_")){toast("No ingreses claves secretas.");return}
-  settings={url:u,key};localStorage.setItem("david-supabase-config",JSON.stringify(settings));
-  session=null;userProfile=null;localStorage.removeItem("david-auth-session");closeModal();renderAdmin();connectionDialog("login");
+ $("#config-form").onsubmit=async e=>{
+  e.preventDefault();const d=new FormData(e.currentTarget);let next;
+  try{next=window.DavidAuth.validatePublicConfig({url:d.get("url"),key:d.get("key")})}catch(error){toast(error.message);return}
+  await disposeClient();settings={...next,error:null};localStorage.setItem("david-supabase-config",JSON.stringify(next));
+  publicCatalog=[];publicServices();renderAdmin();clientReady=initializeClient();await clientReady;connectionDialog("login");
  };
+}
+async function disposeClient(){
+ const previous=client;client=null;authSubscription?.unsubscribe();authSubscription=null;
+ clearPrivateState();session=null;
+ if(previous){await previous.auth.signOut({scope:"local"}).catch(()=>{});previous.auth.stopAutoRefresh()}
 }
 async function logout(){
- if(session?.access_token){try{await fetch(settings.url.replace(/\/$/,"")+"/auth/v1/logout",{method:"POST",headers:{apikey:settings.key,Authorization:"Bearer "+session.access_token}})}catch{}}
- session=null;userProfile=null;localStorage.removeItem("david-auth-session");renderAdmin();connectionDialog("login");
+ const previous=client;client=null;authSubscription?.unsubscribe();authSubscription=null;
+ previous?.auth.stopAutoRefresh();
+ clearPrivateState();session=null;liveError="Sesión cerrada.";renderAdmin();
+ const storageKey=settings.url?"david-auth-"+new URL(settings.url).host:null;
+ if(storageKey)sessionStorage.setItem(storageKey+"-logout","pending");
+ // Access is closed immediately; a reload also discards a pending logout. Do not create a
+ // replacement client until signOut has finished removing the previous session.
+ try{if(previous){const {error}=await previous.auth.signOut({scope:"local"});if(error)toast("Acceso local cerrado. No se pudo confirmar la revocación remota.")}}catch{toast("Acceso local cerrado. No se pudo confirmar la revocación remota.")}
+ finally{if(storageKey){sessionStorage.removeItem(storageKey);sessionStorage.removeItem(storageKey+"-logout")}}
+ if(isLive()){clientReady=initializeClient();await clientReady;connectionDialog("login")}
 }
-window.addEventListener("hashchange",()=>{if(!$("#site-view").hidden)return;});
+clientReady=initializeClient();
 })();

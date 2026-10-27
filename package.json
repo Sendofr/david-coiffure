@@ -1,0 +1,25 @@
+{
+  "name": "david-coiffure",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build-sdk.cjs",
+    "build:config": "node --env-file-if-exists=.env scripts/build-config.cjs",
+    "check": "node --check dist/app.js && node --check dist/auth.js && node --check dist/config.js",
+    "test": "node --test tests/unit/*.test.cjs",
+    "test:browser": "node --test tests/browser/*.test.cjs",
+    "test:db": "bash scripts/test-db.sh",
+    "test:integration": "bash scripts/test-integration.sh",
+    "dev": "python3 -m http.server 8000 --bind 127.0.0.1 --directory dist"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.118.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "1.64.1"
+  }
+}

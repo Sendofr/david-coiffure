@@ -1,6 +1,7 @@
-/* Configuración pública. No coloques service_role ni contraseñas aquí.
-   Podés definir los valores desde el panel o al publicar este archivo. */
+/* Valores públicos únicamente. Generar con npm run build:config para producción.
+   Sin configuración válida, production bloquea el panel; nunca activa datos demo. */
 window.DAVID_CONFIG = {
+  mode: "demo", // demo | production
   supabaseUrl: "",
   supabasePublishableKey: ""
 };
