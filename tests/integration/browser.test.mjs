@@ -1,12 +1,10 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { resolve, extname } from 'node:path';
 import { chromium } from 'playwright';
 import { createClient } from '@supabase/supabase-js';
 import { startStack } from './stack.mjs';
+import { serveSite, fixtureSupabaseUrl, routeStack } from './static-site.mjs';
 
 let stack, server, browser, origin;
 const accounts = {};
@@ -41,37 +39,27 @@ before(async () => {
   const seedResult = await seedClient.rpc('record_stock_movement', { p_product_id: productId, p_delta_qty: 2, p_kind: 'entrada', p_note: 'Datos ficticios locales de prueba' });
   assert.equal(seedResult.error, null, seedResult.error?.message);
   await seedClient.auth.signOut();
-  const root = resolve('dist');
-  server = createServer(async (req, res) => {
-    try {
-      const pathname = new URL(req.url, 'http://local').pathname;
-      if (pathname === '/config.js') {
-        res.setHeader('Content-Type', 'application/javascript');
-        res.end('window.DAVID_CONFIG=' + JSON.stringify({ mode: 'production', supabaseUrl: stack.url, supabasePublishableKey: stack.anonKey })); return;
-      }
-      const file = resolve(root, '.' + pathname.replace(/\/$/, '/index.html'));
-      if (!file.startsWith(root + '/')) { res.writeHead(403).end(); return; }
-      res.setHeader('Content-Type', ({ '.js': 'application/javascript', '.css': 'text/css', '.html': 'text/html' })[extname(file)] || 'application/octet-stream');
-      res.end(await readFile(file));
-    } catch { res.writeHead(404).end(); }
-  });
-  await new Promise(r => server.listen(0, '127.0.0.1', r));
-  origin = `http://127.0.0.1:${server.address().port}`;
+  server = await serveSite({ mode: 'production', supabaseUrl: fixtureSupabaseUrl, supabasePublishableKey: stack.anonKey });
+  origin = server.origin;
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined, headless: true });
 }, { timeout: 180_000 });
 after(async () => {
   await browser?.close();
-  if (server) await new Promise(r => server.close(r));
+  if (server) await server.close();
   if (stack) await stack.close();
 });
 async function open(t, role) {
   const context = await browser.newContext();
-  t.after(() => context.close());
   const page = await context.newPage();
   page.setDefaultTimeout(12_000);
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.route('https://**/*', route => route.abort());
+  await routeStack(page, stack);
+  await page.addInitScript(() => {
+    window.cspViolations=[];
+    document.addEventListener('securitypolicyviolation', event => window.cspViolations.push(event.violatedDirective));
+  });
+  t.after(async () => { try { assert.deepEqual(await page.evaluate(() => window.cspViolations), []); } finally { if (!page.isClosed()) await page.unrouteAll({ behavior: 'wait' }); await context.close(); } });
   await page.goto(origin);
   await page.locator('#service-grid .service-tile').first().waitFor();
   assert.equal(await page.locator('#service-grid .service-tile').count(), 1, 'Public catalog fetched from PostgreSQL');
@@ -122,6 +110,7 @@ test('venta desde navegador usa RPC real, descuenta stock y actualiza resultado 
   assert.equal(stack.sql(`select stock_qty from public.products where id='${productId}'`), '1.000');
   assert.equal(stack.sql(`select count(*) from public.sales where product_id='${productId}' and total_gs=110000 and cost_total_gs=65000`), '1');
   await page.locator('[data-page="profits"]').click();
+  await page.locator('#admin-content .finance-total').waitFor();
   assert.match(await page.locator('#admin-content').textContent(), /110[.\s]?000/);
   assert.match(await page.locator('#admin-content').textContent(), /No equivale a utilidad contable/);
   assert.deepEqual(errors, []);
@@ -131,6 +120,7 @@ test('stylist en navegador solo recibe agenda asignada y no consulta finanzas', 
   const { page, errors } = await open(t, 'stylist');
   await page.locator('[data-page="appointments"]').waitFor();
   await page.locator('[data-page="appointments"]').click();
+  await page.locator('#admin-content tbody tr').filter({ hasText: 'Cita asignada A' }).waitFor();
   const content = await page.locator('#admin-content').textContent();
   assert.ok(content.includes('Cita asignada A'));
   assert.ok(!content.includes('Cita asignada B'));
@@ -145,5 +135,45 @@ test('cuenta sin perfil real permanece bloqueada en el navegador sin datos ficti
   assert.equal(await page.locator('[data-page="clients"]').count(), 0);
   assert.ok(!(await page.locator('#admin-content').textContent()).includes('Clienta de ejemplo'));
   assert.equal(await page.evaluate(() => localStorage.getItem('david-coiffure-demo-v1')), null);
+  assert.deepEqual(errors, []);
+});
+
+test('productos reales: SKU manual, edición, duplicado y generación opcional con CSP Netlify', async t => {
+  const { page, errors } = await open(t, 'owner');
+  await page.locator('[data-page="inventory"]').waitFor();
+  await page.locator('[data-page="inventory"]').click();
+  await page.locator('[data-action="new-products"]').click();
+  await page.locator('#field-name').fill('Producto manual local');
+  await page.locator('#field-sku').fill('manual-local-001');
+  await page.locator('#field-category').selectOption('Venta');
+  await page.locator('#field-cost_gs').fill('40000');
+  await page.locator('#field-sale_price_gs').fill('80000');
+  await page.locator('#edit-form button[type="submit"]').click();
+  await page.locator('#modal-backdrop').waitFor({ state: 'hidden' });
+  assert.equal(stack.sql("select count(*) from public.products where sku='MANUAL-LOCAL-001' and stock_qty=0 and cost_gs=40000 and sale_price_gs=80000"), '1');
+  const row = page.locator('#admin-content tbody tr').filter({ hasText: 'MANUAL-LOCAL-001' });
+  await row.locator('[data-edit="products"]').click();
+  await page.locator('#field-name').fill('Producto manual actualizado');
+  await page.locator('#field-cost_gs').fill('45000');
+  await page.locator('#edit-form button[type="submit"]').click();
+  await page.locator('#modal-backdrop').waitFor({ state: 'hidden' });
+  assert.equal(stack.sql("select count(*) from public.products where sku='MANUAL-LOCAL-001' and name='Producto manual actualizado' and cost_gs=45000"), '1');
+  await page.locator('[data-action="new-products"]').click();
+  await page.locator('#field-name').fill('Duplicado bloqueado');
+  await page.locator('#field-sku').fill('MANUAL-LOCAL-001');
+  await page.locator('#field-cost_gs').fill('100');
+  await page.locator('#edit-form button[type="submit"]').click();
+  assert.match(await page.locator('#toast').textContent(), /código ya existe/);
+  assert.equal(stack.sql("select count(*) from public.products where sku='MANUAL-LOCAL-001'"), '1');
+  await page.locator('#generate-sku').click();
+  const generated = await page.locator('#field-sku').inputValue();
+  assert.match(generated, /^DAV-[A-Z2-9]{7}$/);
+  await page.locator('#field-name').fill('Producto con SKU generado');
+  await page.locator('#edit-form button[type="submit"]').click();
+  await page.locator('#modal-backdrop').waitFor({ state: 'hidden' });
+  assert.equal(stack.sql("select count(*) from public.products where name='Producto con SKU generado' and sku like 'DAV-%' and stock_qty=0"), '1');
+  await page.reload(); await page.locator('#open-admin').click();
+  await page.locator('[data-page="inventory"]').waitFor(); await page.locator('[data-page="inventory"]').click();
+  assert.ok((await page.locator('#admin-content').textContent()).includes(generated));
   assert.deepEqual(errors, []);
 });

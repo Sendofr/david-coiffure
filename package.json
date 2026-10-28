@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node scripts/build-sdk.cjs",
     "build:config": "node --env-file-if-exists=.env scripts/build-config.cjs",
-    "check": "node --check dist/app.js && node --check dist/auth.js && node --check dist/config.js",
+    "check": "node --check dist/app.js && node --check dist/auth.js && node --check dist/pagination.js && node --check dist/config.js",
     "test": "node --test tests/unit/*.test.cjs",
     "test:browser": "node --test tests/browser/*.test.cjs",
     "test:db": "bash scripts/test-db.sh",

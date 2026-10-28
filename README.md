@@ -2,7 +2,8 @@
 
 Plataforma existente para David Coiffure, Encarnación. Se conserva la identidad
 negro, marfil y champagne y el despliegue estático. Esta rama desarrolla el primer
-hito de seguridad; no declara disponibilidad comercial.
+hito de seguridad y prepara Netlify como hosting definitivo; Vercel se reserva
+a pruebas. No declara disponibilidad comercial.
 
 ## Ejecutar y comprobar
 
@@ -22,8 +23,9 @@ python3 -m http.server 8000 --bind 127.0.0.1 --directory dist
 
 El build empaqueta el SDK oficial de Supabase para servirlo localmente. La app
 sigue siendo HTML/CSS/JavaScript estático, sin servidor de aplicación. Generar
-configuración explícitamente con `npm run build:config` y las variables públicas
-de [.env.example](.env.example). Nunca usar service_role, contraseñas ni claves
+configuración durante el build con `npm run build:config` y las variables públicas
+de [.env.example](.env.example). En Netlify se ejecutan ambos pasos. Nunca usar
+service_role, contraseñas ni claves
 secretas en el navegador.
 
 ## Modos y capacidades
@@ -39,15 +41,26 @@ secretas en el navegador.
 - owner/manager administran; stylist consulta su agenda asignada. Equipo y datos
   administrativos no tienen lectura anónima. Servicios activos sí son públicos.
 
-No se conectó ni modificó una base real del salón durante este trabajo. El
-propietario debe revisar/aplicar migraciones en ensayo, invitar cuentas y validar
-la integración antes de operar con información real.
+El propietario indica que la base Supabase ya existe y las escrituras desde la
+web persisten. Esta revisión no conecta ni modifica su base real. Las pruebas
+automatizadas usan un stack local descartable. Antes de usar esta actualización,
+conciliar el historial manual y aplicar de forma autorizada la nueva migración
+de informes; no volver a ejecutar las migraciones iniciales sin revisar su estado.
+
+Las colecciones usan paginación y orden estable para superar el límite REST de
+1.000 filas. Los totales mensuales se calculan en PostgreSQL y no mediante sumas
+de una descarga potencialmente parcial. Un fallo de carga no debe mostrar
+resultados incompletos como definitivos. Ver el alcance de concurrencia en
+[OPERACION.md](docs/OPERACION.md).
 
 ## Documentación
 
 - [Plan por hitos y auditoría inicial](docs/PLAN.md).
 - [Instalación, Supabase, despliegue y recuperación](docs/OPERACION.md).
 - [Permisos, sesiones y seguridad](docs/SECURITY.md).
+- [Netlify desde GitHub o subida manual de dist](docs/NETLIFY.md).
+- [Conciliar migraciones ejecutadas desde SQL Editor](docs/MIGRACIONES.md).
+- [Informe de revisión de Fase 1](docs/REVISION_FASE_1.md).
 
 `supabase/migrations/` contiene el procedimiento versionado, incluida la base
 original. `supabase/schema.sql` bloquea su ejecución y dirige a las migraciones;

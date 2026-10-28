@@ -32,8 +32,11 @@ secretas. Mantener configuración de proyecto fuera de commits compartidos y
 revisar el diff antes de publicar.
 
 Servir solo `dist/`, nunca checkout completo, `.env`, backups ni herramientas de
-base de datos. Construir antes de preparar el artefacto estático. No se necesita
-Node en producción. Python es solo servidor de desarrollo.
+base de datos. Construir SDK y configuración antes de preparar el artefacto
+estático. No se necesita Node en producción. Python es solo desarrollo. Ver
+[NETLIFY.md](NETLIFY.md) para despliegue automático y publicación manual, incluidos
+los encabezados de seguridad conservados dentro de dist. Netlify es el destino
+definitivo; Vercel solo se utiliza para pruebas.
 
 Recursos externos: `images.unsplash.com`, `fonts.googleapis.com`,
 `fonts.gstatic.com`, `cdn.simpleicons.org` y hostname HTTPS concreto de Supabase.
@@ -41,28 +44,28 @@ Revisar disponibilidad y autorizaciones; no abrir toda la red por un fallo.
 
 ## Supabase del propietario
 
-No se autorizaron cambios en una base real. El propietario debe:
+El propietario confirma que creó la base manualmente y que la web persiste sus
+operaciones. Esta revisión no toca ese proyecto. Para conciliar exactamente los
+dos archivos ejecutados desde SQL Editor y actualizar sin duplicarlos, seguir
+[MIGRACIONES.md](MIGRACIONES.md). El propietario debe:
 
 1. Identificar su proyecto y un entorno separado de ensayo.
 2. Obtener URL y publishable/anon key; no compartir contraseñas/claves
    administrativas en chat ni archivos públicos.
-3. Revisar `supabase/migrations/20261027000100_baseline.sql` y
-   `20261027000200_security.sql` juntas. Hacer backup antes de migrar.
-   `supabase/schema.sql` es referencia histórica: no ejecutarlo nuevamente sobre
-   un entorno endurecido, porque puede reabrir permisos antiguos.
+3. Revisar las migraciones y el historial real antes de preparar una actualización.
+   Hacer backup. `supabase/schema.sql` bloquea su ejecución y dirige al
+   procedimiento versionado; baseline no debe repetirse tras el endurecimiento.
 4. Instalar/fijar Supabase CLI desde el canal oficial. Para un stack descartable
    local ejecutar `supabase start` y `supabase migration up --local`.
    `supabase db reset --local` recrea y **borra los datos locales**; solo usarlo
    para pruebas descartables, nunca como procedimiento de actualización.
-5. Para un proyecto remoto autorizado: `supabase link --project-ref <referencia>`
-   y `supabase db push --dry-run`; revisar referencia/plan antes de aprobar
-   `supabase db push`. La autenticación administrativa de CLI es privada y no
-   forma parte del arranque del navegador.
-6. Si ya existe el esquema original, comprobar correspondencia con la migración
-   base: IF NOT EXISTS no repara diferencias arbitrarias. No marcar migraciones
-   aplicadas sin inspección. Las nuevas restricciones NOT VALID preservan datos
-   heredados; auditar, corregir mediante plan explícito y ejecutar VALIDATE
-   CONSTRAINT antes de operar. No borrar registros para hacer pasar una migración.
+5. Antes del dry-run de un proyecto remoto, conciliar el historial según el
+   documento dedicado. Nunca marcar versiones nuevas como aplicadas ni ejecutar
+   baseline de nuevo para resolver un historial vacío. La autenticación de CLI
+   es privada y no forma parte del navegador.
+6. Auditar las restricciones NOT VALID: preservan registros heredados pero
+   requieren revisión, corrección explícita y VALIDATE CONSTRAINT antes de operar.
+   No borrar registros para hacer pasar una migración.
 7. Invitar cuentas Auth y asignar perfiles mediante SQL administrativo.
 
 Después del endurecimiento en una copia de ensayo autorizada, ejecutar
@@ -88,6 +91,31 @@ vincular `profiles.staff_id` a `staff` real. Verificar que el SQL afectó la cue
 correcta. Nunca asignar rol desde metadatos de registro público.
 
 ## Pruebas y alcance
+
+### Colecciones e informes grandes
+
+Las colecciones se recuperan con rangos y orden estable por id, continuando hasta
+una página vacía; un servidor que limite la página a menos filas no termina la
+carga prematuramente. La carga verifica recuentos y membresía para detectar
+inestabilidad, tiene límites defensivos y falla explícitamente en vez de truncar
+sin aviso. Un error de red no publica una colección parcial ni activa demo.
+Los límites son 200.000 registros y 1.000 páginas por colección, incluyendo la
+verificación de ids; si se alcanzan, se muestra error. No representan un límite
+de la base de datos. Un crecimiento mayor requiere listados por período o
+paginación visible en la interfaz, no eliminar registros.
+
+No existe una instantánea SQL compartida entre múltiples peticiones HTTP:
+escrituras concurrentes pueden cambiar el contenido de las listas durante la
+carga. Si se detecta inestabilidad se solicita recargar; las verificaciones no
+deben presentarse como aislamiento transaccional de todo el navegador.
+
+Los importes y recuentos mensuales, incluida la evolución de seis meses, proceden
+de `report_financials` en PostgreSQL mediante una sola instantánea autorizada. No
+dependen de sumar las ventas/gastos descargados. La instantánea describe el
+momento de la consulta; otra operación posterior puede requerir actualizar la
+pantalla. Si la RPC falta o falla no se sustituye por totales parciales locales.
+
+### Suites
 
 `npm test` ejecuta pruebas Node. `npm run test:browser` usa Playwright; para
 Chromium existente: `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium`.

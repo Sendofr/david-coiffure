@@ -1,64 +1,130 @@
-# Hito 1 para revisión
+# Cierre de Fase 1 para revisión
 
-La versión anterior inicializaba registros demo también al conectar Supabase y
-podía mantener colecciones después del logout. Este cambio separa los modos y
-usa el SDK oficial para Auth/API; PostgreSQL aplica los permisos administrativos.
-El sitio existente y sus fotografías se mantienen. No se desplegó producción ni
-se modificó ningún proyecto real de Supabase.
+La revisión corrige las lecturas limitadas por Supabase y prepara Netlify como
+hosting definitivo, conservando la web, fotografías, identidad visual y funciones
+existentes. Vercel queda reservado a pruebas. No se implementaron reservas
+avanzadas ni caja/ventas múltiples. No se hizo merge ni se desplegó producción.
 
-## Cambios
+El propietario informa que la base creada desde SQL Editor ya persiste las
+operaciones de la web. Esta revisión no cambió su base real. Las comprobaciones
+de negocio y permisos se ejecutaron contra servicios locales descartables.
 
-- `dist/auth.js`, `dist/app.js`, `dist/config.js`: configuración pública validada,
-  sesión por pestaña, renovación, limpieza de datos, consultas por rol y bloqueo
-  de envíos repetidos en una página. Se conserva el demo anterior.
-- `dist/index.html`, `dist/styles.css`: carga local del SDK y corrección del
-  desbordamiento del panel; branding y accesos móviles conservados.
-- `supabase/migrations/`: base versionada y endurecimiento de RLS, privilegios
-  de tabla/columna y RPC sin borrar datos; equipo privado, catálogos públicos
-  limitados y operaciones transaccionales de inventario.
-- `supabase/audit-legacy.sql`, `supabase/config.toml`: revisión de datos heredados
-  y configuración local sin registro público ni semillas demo.
-- `package*.json`, `.env.example`, `scripts/`, `tests/`, `.github/workflows/ci.yml`:
-  dependencias fijadas, build estático y verificaciones ejecutables.
-- `README.md`, `docs/`: plan de fases, operación, permisos y recuperación.
+## Problemas corregidos
 
-## Validación ejecutada
+- `dist/pagination.js`, `dist/app.js`: rangos, orden por id y cursor, conteos y
+  verificación de membresía para recuperar colecciones completas incluso por
+  encima de 1.000 registros. Fallos de red, cancelaciones, límites o cambios
+  detectados invalidan la carga; no se publica una descarga parcial.
+- `20261028000100_financial_report.sql`: RPC de lectura owner/manager con RLS y
+  snapshot PostgreSQL para totales mensuales e historial de seis meses. Los
+  importes no dependen de sumar páginas REST. Las dos migraciones anteriores
+  permanecen sin cambios; la nueva no se aplicó al proyecto del salón.
+- `dist/app.js`: al cambiar de mes, vender en otro período, recargar o cerrar
+  sesión se invalidan respuestas antiguas. Durante el cálculo no se muestran
+  cifras previas como actuales. Si falta la RPC, CRUD sigue disponible y los
+  totales quedan explícitamente indisponibles, sin sumas locales de sustitución.
+- `netlify.toml`, `dist/_headers`: build y publicación estática, Node 24, CSP y
+  cabeceras compartidas por publicación GitHub/manual. No hay fallback SPA que
+  oculte scripts inexistentes mediante HTML con estado 200.
+- `scripts/build-config.cjs`, `.env.example`: configuración pública generada por
+  build, publishable/anon tradicional admitidas y rechazo de secretos. Netlify
+  exige modo explícito y HTTPS para producción; la configuración publicada no
+  depende de preferencias anteriores de localStorage.
+- `tests/`, `.github/workflows/ci.yml`, `docs/`: regresiones, datos de prueba
+  grandes, build CI aislado y procedimientos de Netlify/conciliación de historial.
 
-- `npm ci`, `npm run build`, `npm run check`: correctos.
-- `npm test`: 8 pruebas aprobadas.
-- `npm run test:browser`: 11 pruebas aprobadas; 360, 390, 768 y 1440 píxeles,
-  CRUD demo, HTML escapado, separación de modos y SDK con respuestas controladas.
-- `npm run test:db`: 84 aserciones SQL aprobadas, más actualización con datos,
-  auditoría de restricciones heredadas y concurrencia en dos sesiones PostgreSQL.
-- `npm run test:integration`: 12 pruebas aprobadas contra GoTrue, PostgREST y
-  PostgreSQL locales reales; 4 son recorridos Chromium y 8 comprueban Auth/API.
-- Venta concurrente de la última unidad: una aceptada y otra rechazada, stock
-  cero, una venta y un único movimiento de salida. Costo histórico protegido.
-- `npm audit`: ninguna vulnerabilidad conocida al ejecutar la comprobación.
-- `git diff --check`: correcto.
+## Comprobaciones ejecutadas
 
-Sin fallos ni pruebas omitidas en la ejecución final. Los tests funcionales
-excluyen fotografías/fuentes externas de su red; preservan sus URLs originales
-y no certifican disponibilidad de esos proveedores. El workflow de GitHub Actions
-está preparado; su ejecución remota no se presupone aprobada.
+| Comprobación | Resultado |
+| --- | --- |
+| Build estático y generación production con configuración pública anon suministrada | Correctos; artefacto local, sin publicación |
+| Validación JavaScript | Correcta |
+| `npm test` | 22 aprobadas |
+| `npm run test:browser` | 21 aprobadas, incluidas 5 de artefacto/cabeceras Netlify |
+| `npm run test:db` | 84 aserciones existentes + 29 nuevas: 113 aprobadas |
+| `npm run test:integration` | 19 aprobadas; sin fallos ni omisiones en la ejecución final |
+| `npm audit` | 0 vulnerabilidades conocidas reportadas |
+| `git diff --check` | Correcto |
+| Parseo de netlify.toml y enlaces Markdown relativos | Correctos |
 
-## Acciones del propietario antes de datos reales
+Los tests SQL añaden pruebas de actualización sin pérdida de datos, auditoría
+heredada, dos ventas simultáneas de la última unidad y snapshot de informes
+mientras otra sesión modifica gastos. Solo una venta consume la última unidad:
+stock cero, costo histórico del inventario y un movimiento de salida.
 
-1. Revisar este cambio y las migraciones; preparar backup y proyecto de ensayo.
-2. Aplicar allí el procedimiento de `docs/OPERACION.md`, auditar datos heredados
-   y validar las restricciones pendientes sin borrar registros.
-3. Invitar usuarios, asignar perfiles y vincular stylist a su profesional.
-4. Desactivar signup en el proyecto alojado, configurar Auth y proporcionar solo
-   URL y clave pública al build. Nunca enviar secretos por chat ni al navegador.
-5. Repetir las comprobaciones de roles, sesiones y ventas en ese proyecto.
-6. Revisar hosting, HTTPS/cabeceras, privacidad, backups y restauración antes de
-   autorizar el uso comercial.
+La integración usa GoTrue, PostgREST y PostgreSQL reales locales con el SDK
+oficial. Comprueba login, renovación, logout, retirada de rol, usuarios sin
+perfil, anónimos y los tres roles, CRUD/persistencia de clientes/productos, SKU
+manual/generado/duplicado y ventas concurrentes. Hay 1.505 clientes/movimientos y
+1.535 ventas/gastos en las pruebas de lectura grande: IDs y totales mensuales/de
+seis meses coinciden sin truncamiento de 1.000 filas. Un fallo persistente entre
+páginas rechaza la lectura.
 
-## Alcance pendiente
+Los recorridos Chromium de producción aplican la CSP canónica sin relajarla,
+con un hostname ficticio redirigido al stack descartable. Responsive cubre 360,
+390, 768 y 1440 píxeles, Reservar cita, Acceso equipo y ausencia de desbordamiento.
+Los recursos de ejecución responden 200 y archivos privados/rutas inexistentes
+conservan 404. Estos tests no usan la base real.
 
-Este hito no convierte el producto en una solución comercial terminada. Agenda
-con disponibilidad y solicitudes persistidas corresponde al hito 2. Ventas de
-varias líneas, idempotencia entre reintentos, reversos y caja corresponden al
-hito 3. Paginación, informes ampliados y controles operativos también siguen
-pendientes en el plan. WhatsApp sigue siendo una solicitud sujeta a confirmación.
-El resultado financiero continúa siendo estimado.
+El artefacto production quedó preparado localmente en `.local/netlify-dist`
+y su archivo comprimido, fuera de Git. `dist/config.js` versionado conserva
+la configuración demo y `.env` permanece ignorado. No se publicaron sus valores
+ni se requieren credenciales administrativas para construir la web.
+
+## Límites de la evidencia
+
+- Las peticiones de solo lectura al proyecto alojado fueron bloqueadas por el
+  proxy con CONNECT 403. No se verificaron desde esta máquina sus roles, esquema
+  o historial. El dominio requerido se añadió al borrador de red; guardarlo no
+  aplica por sí solo el cambio a la máquina actual.
+- No se ejecutaron comandos CLI contra el proyecto remoto. La sintaxis de
+  conciliación se contrastó con fuente oficial; no se certifica aquí una
+  instalación funcional de CLI ni el resultado remoto de sus comandos.
+- GitHub Actions está preparado; una ejecución remota no se presume aprobada.
+  Las cabeceras se comprobaron en un servidor de prueba; no se certifica una
+  instancia Netlify que aún no fue publicada.
+- Las URLs de imágenes/fuentes se conservaron. Las pruebas funcionales aíslan
+  esos proveedores y no certifican su disponibilidad ni derechos de uso.
+- Las listas REST no comparten una transacción entre peticiones. Se detectan
+  cambios observables, pero los totales financieros dependen del snapshot de la
+  RPC; una operación posterior puede requerir actualizar la pantalla.
+
+## Pendientes clasificados
+
+### Bloqueante para merge
+
+No queda un bloqueo técnico conocido tras las comprobaciones locales finales.
+El PR requiere revisión; no se autoriza merge automático. El estado real de
+publicación de rama/PR debe confirmarse mediante las herramientas de GitHub,
+sin inferirlo de un commit o un archivo preparado localmente.
+
+### Bloqueante para producción
+
+1. El propietario debe respaldar y comparar el estado manual con las dos
+   migraciones ejecutadas, conciliar su historial y revisar el dry-run. Solo
+   después debe aplicar de forma autorizada la migración nueva de informes.
+   No marcarla como aplicada si aún no se ejecutó. Ver [MIGRACIONES.md](MIGRACIONES.md).
+2. Auditar datos heredados y validar las restricciones NOT VALID sin borrar
+   registros. Confirmar roles, staff_id, signup desactivado y pruebas de sesión,
+   permisos, ventas e informes en el proyecto alojado.
+3. Configurar en Netlify las variables públicas correctas para cada contexto,
+   revisar el artefacto con navegador nuevo/dispositivos y autorizar por separado
+   la publicación. Ver [NETLIFY.md](NETLIFY.md) para GitHub o subida manual.
+4. Comprobar dominio/HTTPS/cabeceras, configuración Auth y recuperación de cuentas,
+   backup y restauración ensayada, privacidad y autorización de fotografías/marca
+   antes del uso comercial. No se presuponen configurados por esta rama.
+
+### Mejora futura
+
+- Disponibilidad real, vacaciones y solicitudes de reserva persistidas: Fase 2.
+- Carrito/ventas múltiples, descuentos, idempotencia entre reintentos, reversos,
+  devoluciones y conciliación de caja: Fase 3. Mientras tanto, ante error de red
+  después de enviar una venta se debe revisar el historial antes de repetirla.
+- Paginación visible o filtros para un volumen que supere los límites defensivos
+  de lectura, informes ampliados, accesibilidad y optimización. Alcanzar un
+  límite produce un error explícito, no un resultado truncado.
+
+El informe sigue siendo un resultado operativo estimado. No reemplaza utilidad
+contable, facturación tributaria paraguaya, pagos online ni recordatorios
+integrados. La Fase 1 queda preparada para revisión con las acciones de producción
+anteriores pendientes del propietario.

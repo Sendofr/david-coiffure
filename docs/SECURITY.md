@@ -46,9 +46,10 @@ tokens de usuario no sustituyen RLS.
 ## Revisión antes de publicar
 
 La referencia histórica `supabase/schema.sql` ya no se ejecuta. El procedimiento
-versionado está en `supabase/migrations/`: primero baseline y después seguridad.
-Ver instalación nueva, actualización de la base existente y revisión de
-restricciones heredadas en [OPERACION.md](OPERACION.md).
+versionado está en `supabase/migrations/`. Para instalaciones nuevas se aplican
+en orden; para la base manual existente conciliar primero el historial como se
+documenta en [MIGRACIONES.md](MIGRACIONES.md). No repetir baseline tras seguridad.
+Revisar restricciones heredadas en [OPERACION.md](OPERACION.md).
 
 1. Backup y revisión/aplicación de migraciones en ensayo; resolver y validar
    restricciones heredadas marcadas NOT VALID.
@@ -57,9 +58,10 @@ restricciones heredadas en [OPERACION.md](OPERACION.md).
 3. Desactivar registro público de personal en Auth; definir invitación,
    confirmación de email, contraseñas y recuperación. Evaluar MFA para el dueño;
    el panel de esta fase no implementa su interfaz.
-4. Configurar dominios/redirecciones Auth, HTTPS y cabeceras en hosting: CSP
-   restrictiva comprobada con los estilos existentes, frame-ancestors,
-   X-Content-Type-Options, Referrer-Policy y HSTS tras verificar HTTPS.
+4. Configurar dominios/redirecciones Auth y verificar HTTPS/cabeceras en el
+   destino autorizado. `dist/_headers` prepara CSP, frame-ancestors,
+   X-Content-Type-Options, Referrer-Policy y HSTS para Netlify. Los tests locales
+   no certifican que un sitio Netlify no desplegado ya las haya aplicado.
 5. Auditar permisos/políticas externos a las migraciones: una política permisiva
    adicional puede abrir acceso. No crear accesos anónimos para compensar
    funciones de agenda aún pendientes.

@@ -3,6 +3,7 @@ const { writeFileSync } = require('node:fs');
 const { validatePublicConfig } = require('../dist/auth.js');
 
 function publicConfig(env) {
+  if (env.NETLIFY === 'true' && !env.DAVID_MODE) throw Error('Netlify requiere DAVID_MODE explícito: production o demo.');
   const mode = env.DAVID_MODE || 'demo';
   const config = {
     mode,
@@ -10,7 +11,12 @@ function publicConfig(env) {
     supabasePublishableKey: env.SUPABASE_PUBLISHABLE_KEY || ''
   };
   if (!['demo', 'production'].includes(mode)) throw Error('DAVID_MODE debe ser demo o production.');
-  if (mode === 'production') validatePublicConfig(config);
+  if (mode === 'production') {
+    validatePublicConfig(config);
+    if (env.NETLIFY === 'true' && new URL(config.supabaseUrl).protocol !== 'https:') {
+      throw Error('Netlify requiere la URL HTTPS del proyecto alojado; no usar localhost.');
+    }
+  }
   else if (config.supabaseUrl || config.supabasePublishableKey) {
     throw Error('Para usar Supabase indicá explícitamente DAVID_MODE=production.');
   }

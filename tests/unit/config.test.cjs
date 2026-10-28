@@ -21,6 +21,12 @@ test('demo is explicit and needs no credentials', () => {
   assert.throws(() => publicConfig({ DAVID_MODE: 'typo' }));
   assert.throws(() => publicConfig({ SUPABASE_URL: valid.supabaseUrl }));
 });
+test('Netlify requires an explicit mode and refuses local production endpoints', () => {
+  assert.throws(() => publicConfig({ NETLIFY: 'true' }), /DAVID_MODE/);
+  assert.equal(publicConfig({ NETLIFY: 'true', DAVID_MODE: 'demo' }).mode, 'demo');
+  assert.throws(() => publicConfig({ NETLIFY: 'true', DAVID_MODE: 'production', SUPABASE_URL: 'http://127.0.0.1:54321', SUPABASE_PUBLISHABLE_KEY: valid.supabasePublishableKey }), /HTTPS/);
+  assert.equal(publicConfig({ NETLIFY: 'true', DAVID_MODE: 'production', SUPABASE_URL: valid.supabaseUrl, SUPABASE_PUBLISHABLE_KEY: jwt('anon') }).mode, 'production');
+});
 test('production missing either public setting fails closed', () => {
   for (const config of [{ mode: 'production' }, { ...valid, supabaseUrl: '' }, { ...valid, supabasePublishableKey: '' }, { mode: 'typo' }]) {
     const result = resolveConfig(config, { mode: 'demo' });

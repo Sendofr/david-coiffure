@@ -56,6 +56,8 @@ const persist=()=>{if(!isLive())localStorage.setItem(demoKey,JSON.stringify(stat
 let page="dashboard",search="",filter="todos",userProfile=null,reportMonth=today().slice(0,7);
 let session=null,client=null,authSubscription=null,generation=0,loadSequence=0,loading=false,liveError="";
 let clientReady=Promise.resolve();
+let financialReport=null,financialError="",financialBusy=false,financialSequence=0,collectionSequence=0;
+let dataReads=new AbortController();
 // Discard the legacy hand-rolled session; the SDK owns refresh and storage.
 localStorage.removeItem("david-auth-session");
 const pendingForms=new WeakSet();
@@ -64,7 +66,7 @@ async function submitOnce(form,action){
  pendingForms.add(form);const buttons=[...form.querySelectorAll('button[type="submit"]')];buttons.forEach(b=>b.disabled=true);
  try{return await action()}finally{pendingForms.delete(form);buttons.forEach(b=>b.disabled=false)}
 }
-function clearPrivateState(){generation++;loadSequence++;state=emptyState();userProfile=null;loading=false;page="dashboard";search="";closeModal()}
+function clearPrivateState(){dataReads.abort();dataReads=new AbortController();financialSequence++;collectionSequence++;financialReport=null;financialBusy=false;financialError="";generation++;loadSequence++;state=emptyState();userProfile=null;loading=false;page="dashboard";search="";closeModal()}
 const toast=msg=>{const t=$("#toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3100)};
 const modal=(title,body)=>{$("#modal-title").textContent=title;$("#modal-body").innerHTML=body;$("#modal-backdrop").hidden=false};
 const closeModal=()=>{$("#modal-backdrop").hidden=true;$("#modal-body").innerHTML=""};
@@ -103,9 +105,9 @@ const icons={dashboard:"▦",appointments:"▣",clients:"♙",services:"✦",inv
 const navItems=[["dashboard","Resumen"],["appointments","Agenda"],["clients","Clientes"],["services","Servicios"],["inventory","Inventario"],["movements","Movimientos"],["sales","Ventas"],["expenses","Gastos"],["profits","Ganancias"],["staff","Equipo"],["settings","Configuración"]];
 const canWrite=()=>!isLive()||["owner","manager"].includes(userProfile?.role);
 function adminNav(){
- const allowed=canWrite()?navItems:navItems.filter(x=>["dashboard","appointments","services","staff","settings"].includes(x[0]));
+ const allowed=isLive()&&loading?[]:canWrite()?navItems:navItems.filter(x=>["dashboard","appointments","services","staff","settings"].includes(x[0]));
  $("#admin-nav").innerHTML=allowed.map(([k,label])=>'<button data-page="'+k+'" class="'+(page===k?"active":"")+'"><span style="font-size:19px;width:20px;text-align:center">'+icons[k]+'</span>'+label+'</button>').join("");
- $$("#admin-nav button").forEach(b=>b.onclick=()=>{page=b.dataset.page;search="";filter="todos";renderAdmin();$(".sidebar").classList.remove("open")});
+ $$("#admin-nav button").forEach(b=>b.onclick=()=>{page=b.dataset.page;search="";filter="todos";if(page==="dashboard")reportMonth=today().slice(0,7);renderAdmin();if(isLive()&&canWrite()&&["dashboard","sales","expenses","profits"].includes(page))refreshFinancialReport().then(()=>renderAdmin());$(".sidebar").classList.remove("open")});
  $("#admin-current-name").textContent=navItems.find(x=>x[0]===page)?.[1]||"Resumen";
  $("#mode-label").textContent=isLive()?"SUPABASE · DATOS REALES":"MODO DEMOSTRACIÓN";
  $("#connection-status").textContent=isLive()?(settings.error?"Configuración pendiente":session?"Sesión Supabase":"Supabase sin sesión"):"Datos de ejemplo";
@@ -133,7 +135,33 @@ function financials(month=reportMonth){
  const revenue=sales.reduce((n,s)=>n+Number(s.total_gs||0),0);
  const directCosts=sales.reduce((n,s)=>n+Number(s.cost_total_gs||0),0);
  const overhead=expenses.reduce((n,e)=>n+Number(e.amount_gs||0),0);
- return {sales,expenses,revenue,directCosts,overhead,gross:revenue-directCosts,balance:revenue-directCosts-overhead};
+ if(isLive()){
+  const summary=financialReport?.history?.find(item=>item.month===month);
+  return summary?{...summary,sales,expenses,available:true}:{sales,expenses,available:false};
+ }
+ return {sales,expenses,revenue,directCosts,overhead,gross:revenue-directCosts,balance:revenue-directCosts-overhead,salesCount:sales.length,expensesCount:expenses.length,available:true};
+}
+function financialNotice(){
+ const message=financialBusy?"Calculando el informe completo en el servidor…":financialError||"El informe completo todavía no está disponible.";
+ return panel("Informe financiero no disponible",'<p class="modal-note">'+escapeHTML(message)+'</p><p class="admin-footer-note">No se muestran totales parciales. Los listados pueden corresponder a otra lectura; el resultado sigue siendo operativo estimado.</p><button class="admin-outline" data-action="refresh-report">Actualizar informe</button>');
+}
+async function refreshFinancialReport(){
+ if(!isLive()||!client||!canWrite()||!userProfile)return;
+ const token=generation,sequence=++financialSequence,month=reportMonth;
+ financialReport=null;financialError="";financialBusy=true;
+ renderAdmin();
+ try{
+  const report=await apiRequest("rpc/report_financials","POST",{p_month:month+"-01"});
+  if(token!==generation||sequence!==financialSequence||month!==reportMonth)return;
+  const valid=item=>item&&/^\d{4}-\d{2}$/.test(item.month)&&["salesCount","expensesCount"].every(k=>Number.isSafeInteger(item[k])&&item[k]>=0)&&["revenue","directCosts","overhead","gross","balance"].every(k=>typeof item[k]==="number"&&Number.isFinite(item[k])&&Math.abs(item[k])<=Number.MAX_SAFE_INTEGER/100);
+  const expectedMonths=Array.from({length:6},(_,i)=>{const d=new Date(month+"-01T12:00:00Z");d.setUTCMonth(d.getUTCMonth()-5+i);return d.toISOString().slice(0,7)});
+  if(!valid(report)||report.month!==month||!Array.isArray(report.history)||report.history.length!==6||!report.history.every((item,i)=>valid(item)&&item.month===expectedMonths[i]))throw Error("Respuesta financiera incompleta o fuera del rango numérico seguro.");
+  financialReport=report;
+ }catch(error){
+  if(token!==generation||sequence!==financialSequence)return;
+  financialReport=null;
+  financialError=["PGRST202","42883"].includes(error.code)?"El proyecto necesita la migración de informes revisada por el propietario. No se calcularán totales con listados paginados.":"No se pudo verificar el informe completo. Comprobá la conexión y actualizá antes de usar los resultados.";
+ }finally{if(token===generation&&sequence===financialSequence)financialBusy=false}
 }
 function makeSKU(){
  const alphabet="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";let sku="";
@@ -180,21 +208,21 @@ function saleSubject(s){
 }
 function renderSales(){
  const fin=financials(),rows=[...fin.sales].sort((a,b)=>String(b.sale_date).localeCompare(String(a.sale_date))).map(s=>'<tr>'+td(fmtDate(s.sale_date),"strong-cell")+td(escapeHTML(saleSubject(s))+"<br/><small>"+escapeHTML(s.kind==="producto"?"Producto":"Servicio")+"</small>")+td(escapeHTML(s.quantity))+td(money(s.unit_price_gs))+td(money(s.total_gs))+td(money(s.gross_profit_gs))+td(escapeHTML(s.payment_method||"—"))+'</tr>');
- return title("Ventas","Registrá productos vendidos y servicios realizados.","Registrar venta","new-sale")+monthSelector()+'<div class="metric-grid">'+metric("VENTAS DEL MES",fin.sales.length,"Operaciones registradas","◈")+metric("INGRESOS",money(fin.revenue),"Total cobrado","₲")+metric("COSTOS DIRECTOS",money(fin.directCosts),"Costo asignado","−")+metric("GANANCIA BRUTA",money(fin.gross),"Antes de gastos generales","▥")+'</div>'+panel("Historial de ventas",rows.length?table(["FECHA","PRODUCTO / SERVICIO","CANTIDAD","PRECIO UNIT.","TOTAL","MARGEN BRUTO","PAGO"],rows):'<div class="empty">No hay ventas registradas en este mes.</div>',monthLabel(reportMonth));
+ return title("Ventas","Registrá productos vendidos y servicios realizados.","Registrar venta","new-sale")+monthSelector()+(fin.available?'<div class="metric-grid">'+metric("VENTAS DEL MES",fin.salesCount,"Operaciones registradas","◈")+metric("INGRESOS",money(fin.revenue),"Total cobrado","₲")+metric("COSTOS DIRECTOS",money(fin.directCosts),"Costo asignado","−")+metric("GANANCIA BRUTA",money(fin.gross),"Antes de gastos generales","▥")+'</div>':financialNotice())+panel("Historial de ventas",rows.length?table(["FECHA","PRODUCTO / SERVICIO","CANTIDAD","PRECIO UNIT.","TOTAL","MARGEN BRUTO","PAGO"],rows):'<div class="empty">No hay ventas registradas en este mes.</div>',monthLabel(reportMonth));
 }
 function renderExpenses(){
  const fin=financials(),rows=[...fin.expenses].sort((a,b)=>String(b.expense_date).localeCompare(String(a.expense_date))).map(e=>'<tr>'+td(fmtDate(e.expense_date),"strong-cell")+td(escapeHTML(e.category||"General"))+td(escapeHTML(e.description||"—"))+td(money(e.amount_gs))+td('<button class="tiny-btn" data-edit="expenses" data-id="'+escapeHTML(e.id)+'">Editar</button>')+'</tr>');
- return title("Gastos del salón","Anotá alquiler, servicios, suministros y otros gastos.","Agregar gasto","new-expenses")+monthSelector()+'<div class="metric-grid">'+metric("GASTOS DEL MES",money(fin.overhead),"Total anotado","−")+metric("REGISTROS",fin.expenses.length,"Gastos individuales","▤")+metric("INGRESOS",money(fin.revenue),"Ventas y servicios","₲")+metric("BALANCE ESTIMADO",money(fin.balance),"Ingresos − costos − gastos","▥")+'</div>'+panel("Detalle de gastos",rows.length?table(["FECHA","CATEGORÍA","DETALLE","IMPORTE",""],rows):'<div class="empty">No hay gastos registrados en este mes.</div>',monthLabel(reportMonth));
+ return title("Gastos del salón","Anotá alquiler, servicios, suministros y otros gastos.","Agregar gasto","new-expenses")+monthSelector()+(fin.available?'<div class="metric-grid">'+metric("GASTOS DEL MES",money(fin.overhead),"Total anotado","−")+metric("REGISTROS",fin.expensesCount,"Gastos individuales","▤")+metric("INGRESOS",money(fin.revenue),"Ventas y servicios","₲")+metric("BALANCE ESTIMADO",money(fin.balance),"Ingresos − costos − gastos","▥")+'</div>':financialNotice())+panel("Detalle de gastos",rows.length?table(["FECHA","CATEGORÍA","DETALLE","IMPORTE",""],rows):'<div class="empty">No hay gastos registrados en este mes.</div>',monthLabel(reportMonth));
 }
 function renderProfits(){
- const fin=financials();const history=[];for(let i=5;i>=0;i--){const d=new Date(reportMonth+"-01T12:00:00");d.setMonth(d.getMonth()-i);const m=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");history.push({...financials(m),month:m})}
+ const fin=financials();if(!fin.available)return title("Ganancias y resultados","Resultado operativo estimado.")+monthSelector()+financialNotice();const history=[];for(let i=5;i>=0;i--){const d=new Date(reportMonth+"-01T12:00:00");d.setMonth(d.getMonth()-i);const m=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");history.push({...financials(m),month:m})}
  const max=Math.max(1,...history.map(x=>Math.max(x.revenue,x.balance)));
  const bars='<div class="mini-bars finance-chart">'+history.map(x=>'<div class="bar-group"><div class="bar-pair"><div class="bar bar-revenue" title="Ingresos: '+money(x.revenue)+'" style="height:'+Math.max(3,150*Math.max(0,x.revenue)/max)+'px"></div><div class="bar bar-profit" title="Balance estimado: '+money(x.balance)+'" style="height:'+Math.max(3,150*Math.max(0,x.balance)/max)+'px"></div></div><small>'+escapeHTML(x.month.slice(5))+"/"+escapeHTML(x.month.slice(2,4))+'</small></div>').join("")+'</div><div class="chart-legend"><span><i class="legend-revenue"></i> Ingresos</span><span><i class="legend-profit"></i> Balance estimado</span></div>';
  const detail='<div class="finance-breakdown"><div class="finance-line"><span>Ingresos por ventas y servicios</span><strong>'+money(fin.revenue)+'</strong></div><div class="finance-line"><span>Costos directos de productos y servicios</span><strong>− '+money(fin.directCosts)+'</strong></div><div class="finance-line"><span>Ganancia bruta</span><strong>'+money(fin.gross)+'</strong></div><div class="finance-line"><span>Gastos generales registrados</span><strong>− '+money(fin.overhead)+'</strong></div><div class="finance-total"><span>Resultado mensual estimado</span><strong>'+money(fin.balance)+'</strong></div></div>';
  return title("Ganancias y resultados","Analizá lo que entra, lo que cuesta y lo que queda.")+monthSelector()+'<div class="metric-grid">'+metric("INGRESOS",money(fin.revenue),"Ventas registradas","₲")+metric("COSTO DIRECTO",money(fin.directCosts),"Compra e insumos estimados","−")+metric("GASTOS",money(fin.overhead),"Gastos del mes","▤")+metric("RESULTADO ESTIMADO",money(fin.balance),"No equivale a utilidad contable","▥")+'</div><div class="finance-pair">'+panel("Cómo se calcula el resultado",detail,monthLabel(reportMonth))+panel("Evolución de seis meses",bars,"RESUMEN")+'</div><div class="insight-banner"><div><strong>¿Cómo leer este resultado?</strong>Se calcula como ingresos menos costos directos cargados en cada venta y gastos anotados. No reemplaza la contabilidad: faltan impuestos, depreciación y cualquier costo que no se registre. Para servicios, cargá también el costo directo aproximado. Evitá registrar la compra de mercadería como gasto general si ya se descuenta como costo de los productos vendidos.</div></div>';
 }
 function renderFinancialOverview(){
- const fin=financials(today().slice(0,7));
+ const fin=financials(today().slice(0,7));if(!fin.available)return financialNotice();
  return '<div style="margin-top:24px">'+panel("Este mes · Ventas y ganancias",'<div class="metric-grid">'+metric("INGRESOS",money(fin.revenue),"Ventas y servicios","₲")+metric("GANANCIA BRUTA",money(fin.gross),"Después de costos directos","◈")+metric("GASTOS",money(fin.overhead),"Gastos ingresados","−")+metric("RESULTADO",money(fin.balance),"Balance estimado","▥")+'</div><button class="admin-outline" data-action="profits">Ver informe mensual ↗</button>',monthLabel(today().slice(0,7)))+'</div>';
 }
 function renderStaff(){
@@ -218,9 +246,10 @@ function wireActions(){
  const a=b.dataset.action;
  if(a==="connect"){if(isLive())clientReady.then(()=>loadLive(true));else connectionDialog()}
  else if(a==="settings"){page="settings";renderAdmin()}
- else if(a==="profits"){page="profits";reportMonth=today().slice(0,7);renderAdmin()}
+ else if(a==="profits"){page="profits";reportMonth=today().slice(0,7);renderAdmin();if(isLive())refreshFinancialReport().then(()=>renderAdmin())}
  else if(a==="logout")logout();
  else if(a==="reset-demo"&&!isLive()){if(confirm("¿Restaurar todos los datos ficticios?")){state=seeded();persist();renderAdmin();toast("Demo restaurada.")}}
+ else if(a==="refresh-report")refreshFinancialReport().then(()=>renderAdmin());
  else if(a==="new-movement")movementDialog();
  else if(a==="new-sale")saleDialog();
  else if(a.startsWith("new-"))editDialog(a.slice(4));
@@ -228,7 +257,7 @@ function wireActions(){
  $$("#admin-content [data-edit]").forEach(b=>b.onclick=()=>editDialog(b.dataset.edit,b.dataset.id));
  $$("#admin-content [data-stock]").forEach(b=>b.onclick=()=>movementDialog(b.dataset.stock));
  const q=$("#data-search");if(q)q.oninput=e=>{const pos=e.target.selectionStart;search=e.target.value;const fn={appointments:renderAppointments,clients:renderClients,services:renderServices,inventory:renderInventory,staff:renderStaff}[page];if(fn){$("#admin-content").innerHTML=fn();wireActions();const nq=$("#data-search");nq.focus();nq.setSelectionRange(pos,pos)}};
- const m=$("#report-month");if(m)m.onchange=e=>{reportMonth=e.target.value||today().slice(0,7);renderAdmin()};
+ const m=$("#report-month");if(m)m.onchange=e=>{reportMonth=e.target.value||today().slice(0,7);financialReport=null;renderAdmin();if(isLive())refreshFinancialReport().then(()=>renderAdmin())};
  $$("#admin-content [data-filter]").forEach(b=>b.onclick=()=>{filter=b.dataset.filter;renderAdmin()});
 }
 const input=(name,label,value="",type="text",attrs="")=>'<div class="form-field"><label for="field-'+name+'">'+label+'</label><input id="field-'+name+'" name="'+name+'" type="'+type+'" value="'+escapeHTML(value)+'" '+attrs+' /></div>';
@@ -324,7 +353,7 @@ function saleDialog(){
   if(kind==="producto"&&(!product||quantity>Number(product.stock_qty))){toast("No hay stock suficiente para esa venta.");return}
   if(kind==="servicio"&&!form.get("service_id")){toast("Elegí un servicio.");return}
   const data={kind,product_id:kind==="producto"?form.get("product_id"):null,service_id:kind==="servicio"?form.get("service_id"):null,sale_date:form.get("sale_date"),quantity,unit_price_gs,unit_cost_gs,payment_method:form.get("payment_method"),customer_name:form.get("customer_name")||null,notes:form.get("notes")||null};
-  try{await submitOnce(e.currentTarget,()=>registerSale(data));reportMonth=String(data.sale_date).slice(0,7);closeModal();toast("Venta registrada y resultado actualizado.");page="sales";renderAdmin()}catch(err){toast("Error: "+err.message)}
+  try{await submitOnce(e.currentTarget,()=>registerSale(data));reportMonth=String(data.sale_date).slice(0,7);closeModal();toast(isLive()&&!financialReport?"Venta registrada. El informe está pendiente de verificación.":"Venta registrada y resultado actualizado.");page="sales";renderAdmin()}catch(err){toast("Error: "+err.message)}
  };
 }
 async function apiRequest(path,method="GET",body){
@@ -380,6 +409,7 @@ async function registerSale(data){
  if(isLive()){
   if(!userProfile||!["owner","manager"].includes(userProfile.role))throw Error("No tenés permiso para registrar ventas.");
   await apiRequest("rpc/register_sale","POST",{p_kind:data.kind,p_product_id:data.product_id,p_service_id:data.service_id,p_sale_date:data.sale_date,p_quantity:data.quantity,p_unit_price_gs:data.unit_price_gs,p_unit_cost_gs:data.unit_cost_gs,p_payment_method:data.payment_method,p_customer_name:data.customer_name||"",p_notes:data.notes||""});
+  reportMonth=String(data.sale_date).slice(0,7);
   await fetchCollections();return;
  }
  const p=data.kind==="producto"?state.products.find(x=>x.id===data.product_id):null;
@@ -397,15 +427,17 @@ async function registerSale(data){
  persist();
 }
 async function fetchCollections(){
- const token=generation;
+ const token=generation,sequence=++collectionSequence,activeClient=client,signal=dataReads.signal;
+ financialSequence++;financialReport=null;financialError="";financialBusy=userProfile?.role!=="stylist";renderAdmin();
  const tables=userProfile?.role==="stylist"?["services","staff","appointments"]:["services","staff","clients","appointments","products","stock_movements","sales","expenses"];
  const next=emptyState();
  try{
-  const output=await Promise.all(tables.map(x=>apiRequest(x+"?select=*")));
-  if(token!==generation)throw Error("La sesión cambió.");
+  const output=await Promise.all(tables.map(x=>window.DavidPagination.fetchAll(activeClient,x,{signal})));
+  if(token!==generation||sequence!==collectionSequence)throw Error("La sesión o la consulta cambió.");
   tables.forEach((x,i)=>next[x]=Array.isArray(output[i])?output[i]:[]);
   state=next;
- }catch(error){if(token===generation){clearPrivateState();liveError="No se pudieron actualizar los datos. Comprobá la conexión y volvé a ingresar. Si guardaste una operación, verificá su historial antes de repetirla.";renderAdmin()}throw error}
+  if(userProfile?.role!=="stylist")await refreshFinancialReport();
+ }catch(error){if(token===generation&&sequence===collectionSequence){clearPrivateState();liveError="No se pudieron actualizar los datos. Comprobá la conexión y volvé a ingresar. Si guardaste una operación, verificá su historial antes de repetirla.";renderAdmin()}throw error}
 }
 async function loadLive(promptLogin=false){
  if(!isLive())return;
@@ -429,11 +461,12 @@ async function loadLive(promptLogin=false){
 }
 async function loadPublicCatalog(){
  if(!isLive()||!client)return;
- const token=generation;
- const {data,error}=await client.from("services").select("id,name,category,duration_minutes,price_gs,active").eq("active",true);
- if(token!==generation)return;
- publicCatalog=error?[]:(data||[]);publicServices();
- if(error)$("#service-grid").textContent="No se pudo cargar el catálogo. Consultá al salón por WhatsApp.";
+ const token=generation,activeClient=client;
+ try{
+  const data=await window.DavidPagination.fetchAll(activeClient,"services",{select:"id,name,category,duration_minutes,price_gs,active",filters:{active:true},signal:dataReads.signal});
+  if(token!==generation||client!==activeClient)return;
+  publicCatalog=data;publicServices();
+ }catch(error){if(token===generation&&client===activeClient){publicCatalog=[];publicServices();$("#service-grid").textContent="No se pudo cargar el catálogo completo. Consultá al salón por WhatsApp."}}
 }
 async function initializeClient(){
  if(!isLive())return;

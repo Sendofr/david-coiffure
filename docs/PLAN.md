@@ -47,7 +47,7 @@ siendo operativo estimado, no utilidad contable ni facturación tributaria.
 
 ## 5. Operación comercial
 
-Refactorización incremental, paginación y reportes agregados, accesibilidad,
+Refactorización incremental, optimización de listados, accesibilidad,
 pruebas de red/sesión/reintentos y regresión visual a 360, 390, 768 y 1440 píxeles.
 Cabeceras seguras, observabilidad sin datos sensibles, backups y restauración
 ensayada. Revisar derechos de fotografías/marca, privacidad, retención y soporte.
@@ -67,7 +67,7 @@ No se incluye SIFEN, cobros online ni recordatorios automáticos.
 | Sin migraciones ni pruebas | Cambios difíciles de revisar; versionado y pruebas locales/CI. |
 | Agenda pública solo genera WhatsApp | No guarda ni confirma reservas; pendiente hito 2. |
 | Venta de una línea sin idempotencia global | Reintentos ambiguos; pendiente hito 3. |
-| Carga completa de tablas | Límites de PostgREST y crecimiento; paginación pendiente. |
+| Carga completa de tablas | Corregida en el cierre del hito 1 con paginación y totales SQL; optimización de listados pendiente. |
 
 Una instalación o prueba aislada no establece disponibilidad comercial. Cada
 resultado debe distinguir ejecutado, fallido y pendiente en el proyecto real.

@@ -112,6 +112,12 @@ test('owner y manager gestionan registros sin modificar stock o historial direct
   }
 });
 
+test('SKU duplicado se rechaza también desde PostgreSQL por API directa', async () => {
+  const result = await clients.owner.from('products').insert({ name: 'Duplicado por API', sku: 'LOCAL-CONCURRENT', category: 'Venta', cost_gs: 1, sale_price_gs: 2 });
+  assert.equal(result.error?.code, '23505');
+  assert.equal(stack.sql("select count(*) from public.products where sku='LOCAL-CONCURRENT'"), '1');
+});
+
 test('dos ventas REST concurrentes: una confirma, otra se rechaza sin stock negativo', async () => {
   const results = await Promise.all([clients.owner.rpc('register_sale', sale()), clients.manager.rpc('register_sale', sale())]);
   assert.equal(results.filter(r => !r.error).length, 1);

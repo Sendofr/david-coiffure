@@ -28,6 +28,7 @@ grant update(unit_cost_gs) on public.sales to authenticated, public;
 SQL
 psql_test < supabase/migrations/20261027000100_baseline.sql >/dev/null
 psql_test < supabase/migrations/20261027000200_security.sql >/dev/null
+psql_test < supabase/migrations/20261028000100_financial_report.sql >/dev/null
 psql_test <<'SQL' >/dev/null
 do $$ begin
  if (select count(*) from public.services where name='Legacy upgrade sentinel')<>1
@@ -46,6 +47,7 @@ fi
 psql_test -c "delete from public.clients where phone='__legacy_audit_fixture__'" >/dev/null
 psql_test < supabase/audit-legacy.sql
 psql_test < supabase/tests/roles.sql
+psql_test < supabase/tests/financial-report.sql
 # Exactly one concurrent sale can consume the last unit; the second must abort.
 psql_test <<'SQL' >/dev/null
 insert into auth.users(id,email) values('00000000-0000-0000-0000-000000000001','owner@test.invalid');
@@ -73,4 +75,40 @@ do $$ begin
  then raise exception 'Concurrent sale integrity failed'; end if;
 end $$;
 select 'PASS: concurrent sales: one succeeds, one rejected, stock zero, one sale/movement' as result;
+SQL
+# Mutable expenses must not produce mixed financial snapshots. Hold the first
+# report statement open, commit an expense edit in another real PostgreSQL
+# session, then evaluate the second report in that SAME calling statement.
+psql_test <<'SQL' >/dev/null
+insert into public.expenses(id,expense_date,category,description,amount_gs)
+values('40000000-0000-0000-0000-000000000001',current_date,'Operativo','Concurrent expense snapshot',10);
+SQL
+snapshot_sql="begin; set local application_name='david-report-snapshot-test'; set local role authenticated; select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',true); with first_report as materialized (select public.report_financials(date_trunc('month',current_date)::date) as data), paused as materialized (select pg_sleep(3) from first_report), second_report as materialized (select public.report_financials(date_trunc('month',current_date)::date) as data from paused) select case when first_report.data=second_report.data and (first_report.data->>'overhead')::numeric=10 then 'PASS: concurrent expense update preserves financial statement snapshot' else 'FAIL: inconsistent financial snapshot' end from first_report cross join second_report; commit;"
+psql_test -c "$snapshot_sql" >"$results/snapshot" 2>&1 & snapshot_pid=$!
+observed_sleep=false
+for attempt in $(seq 1 40); do
+  if [ "$(psql_test -At -c "select exists(select 1 from pg_stat_activity where application_name='david-report-snapshot-test' and wait_event='PgSleep')")" = 't' ]; then
+    observed_sleep=true; break
+  fi
+  sleep 0.05
+done
+if [ "$observed_sleep" != true ]; then
+  wait "$snapshot_pid" || true
+  cat "$results/snapshot"; echo 'Snapshot test did not reach concurrency barrier' >&2; exit 1
+fi
+psql_test -c "update public.expenses set amount_gs=20 where id='40000000-0000-0000-0000-000000000001'" >/dev/null
+if ! wait "$snapshot_pid"; then cat "$results/snapshot"; exit 1; fi
+if ! grep -q 'PASS: concurrent expense update preserves financial statement snapshot' "$results/snapshot"; then
+  cat "$results/snapshot"; exit 1
+fi
+psql_test <<'SQL'
+begin;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',true);
+do $$ begin
+ if (public.report_financials(date_trunc('month',current_date)::date)->>'overhead')::numeric<>20
+ then raise exception 'Next financial statement did not observe committed expense edit'; end if;
+end $$;
+select 'PASS: concurrent expense update preserves financial statement snapshot; next statement observes new expense' as result;
+rollback;
 SQL

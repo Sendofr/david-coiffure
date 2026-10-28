@@ -19,6 +19,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - name: Generate explicit public Netlify demo configuration
+        run: npm run build:config
+        env:
+          NETLIFY: 'true'
+          DAVID_MODE: demo
+          SUPABASE_URL: ''
+          SUPABASE_PUBLISHABLE_KEY: ''
       - run: npm run check
       - run: npm test
       - run: npx playwright install --with-deps chromium

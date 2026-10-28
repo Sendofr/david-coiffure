@@ -32,8 +32,9 @@ async function open(t, { width = 1440, config, seed, api } = {}) {
   const page = await context.newPage();
   // External photos/fonts are excluded from functional tests; the original URLs remain in source.
   await page.route('https://**/*', route => route.abort());
-  if (config) await page.route('**/config.js', route => route.fulfill({
-    contentType: 'application/javascript', body: 'window.DAVID_CONFIG=' + JSON.stringify(config)
+  // Always isolate tests from an owner's local production .env/configuration.
+  await page.route('**/config.js', route => route.fulfill({
+    contentType: 'application/javascript', body: 'window.DAVID_CONFIG=' + JSON.stringify(config || { mode: 'demo' })
   }));
   if (seed) await page.addInitScript(seed);
   if (api) await api(page);
@@ -145,7 +146,7 @@ test('production network outage never falls back to demonstration', async t => {
 
 // UI tests use controlled network responses through the REAL SDK bundle. Separate
 // test:integration exercises real GoTrue, PostgREST and PostgreSQL permissions.
-function mockBackend(role, { outageOnLogout = false } = {}) {
+function mockBackend(role, { outageOnLogout = false, reportMissing = false, reportHistoryInvalid = false } = {}) {
   const calls = [];
   const uid = '00000000-0000-0000-0000-000000000003';
   const user = { id: uid, aud: 'authenticated', role: 'authenticated', email: 'team@example.invalid', app_metadata: { provider: 'email' }, user_metadata: {}, created_at: new Date().toISOString() };
@@ -153,13 +154,21 @@ function mockBackend(role, { outageOnLogout = false } = {}) {
   const token = encode({ alg: 'HS256', typ: 'JWT' }) + '.' + encode({ sub: uid, role: 'authenticated', exp: Math.floor(Date.now()/1000)+3600 }) + '.test';
   const api = async page => page.route('https://test-project.supabase.co/**', async route => {
     const url = new URL(route.request().url());
-    calls.push({ path: url.pathname, method: route.request().method() });
-    const reply = body => route.fulfill({ json: body, headers: { 'access-control-allow-origin': '*' } });
+    calls.push({ path: url.pathname, method: route.request().method(), body: route.request().postData() ? route.request().postDataJSON() : undefined });
+    const reply = body => route.fulfill({ json: body, headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range' } });
     if (url.pathname.endsWith('/token')) return reply({ access_token: token, token_type: 'bearer', refresh_token: 'test-refresh-token', expires_in: 3600, user });
     if (url.pathname.endsWith('/user')) return reply(user);
     if (url.pathname.endsWith('/logout')) {
       if (outageOnLogout) return route.abort();
       return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*' } });
+    }
+    if (url.pathname.endsWith('/report_financials')) {
+      if (reportMissing) return route.fulfill({status: 404, json: {code:'PGRST202',message:'Missing reporting migration'}, headers:{'access-control-allow-origin':'*'}});
+      const month=route.request().postDataJSON().p_month.slice(0,7);
+      const summary={month,salesCount:1505,expensesCount:1505,revenue:150500,directCosts:60200,overhead:15050,gross:90300,balance:75250};
+      const history=Array.from({length:6},(_,i)=>{const d=new Date(month+'-01T12:00:00Z');d.setUTCMonth(d.getUTCMonth()-5+i);return {...summary,month:d.toISOString().slice(0,7)}});
+      if(reportHistoryInvalid)history[0].month='1980-01';
+      return reply({...summary,history});
     }
     const table = url.pathname.split('/').at(-1);
     const rows = {
@@ -169,7 +178,10 @@ function mockBackend(role, { outageOnLogout = false } = {}) {
       clients: [{ id: uid, name: 'PRIVATE OWNER CLIENT', phone: '000' }],
       appointments: [{ id: uid, staff_id: uid, client_name: 'Assigned appointment', client_phone: '000', appointment_date: '2099-01-01', start_time: '10:00', end_time: '11:00', status: 'pendiente' }]
     };
-    return reply(rows[table] || []);
+    const records=rows[table]||[];
+    if(route.request().method()==='HEAD')return route.fulfill({status:200,headers:{'access-control-allow-origin':'*','access-control-expose-headers':'content-range','content-range':'*/'+records.length}});
+    const cursor=url.searchParams.get('id');
+    return reply(records.filter(row=>!cursor?.startsWith('gt.')||row.id>cursor.slice(3)));
   });
   return { calls, api };
 }
@@ -217,4 +229,74 @@ test('owner login, SDK session restoration, logout and offline logout clear priv
   await page.locator('#login-form').waitFor({ state: 'visible' });
   assert.equal(await page.locator('[data-page="clients"]').count(), 0);
   assert.deepEqual(errors, []);
+});
+test('financial figures come from the complete server report rather than paginated list sums', async t => {
+  const backend=mockBackend('owner');
+  const {page,errors}=await open(t,{config:production,api:backend.api});
+  await login(page);
+  await page.locator('[data-page="profits"]').click();
+  await page.waitForFunction(()=>document.querySelector('#admin-content')?.textContent.includes('No equivale a utilidad contable'));
+  assert.match(await page.locator('#admin-content').textContent(),/150[.\s]?500/);
+  assert.match(await page.locator('#admin-content').textContent(),/75[.\s]?250/);
+  assert.deepEqual(errors,[]);
+});
+test('missing report migration keeps CRUD available and hides incomplete financial totals', async t => {
+  const backend=mockBackend('owner',{reportMissing:true});
+  const {page,errors}=await open(t,{config:production,api:backend.api});
+  await login(page);
+  await page.locator('[data-page="sales"]').click();
+  await page.waitForFunction(()=>document.querySelector('#admin-content')?.textContent.includes('migración de informes'));
+  assert.equal(await page.locator('#admin-content .metric-grid').count(),0);
+  assert.ok(await page.locator('[data-action="new-sale"]').isVisible());
+  await page.locator('[data-page="clients"]').click();
+  assert.match(await page.locator('#admin-content').textContent(),/PRIVATE OWNER CLIENT/);
+  assert.deepEqual(errors,[]);
+});
+test('a sale in another month refreshes the server snapshot for that month before showing success', async t => {
+  const backend=mockBackend('owner');
+  const {page,errors}=await open(t,{config:production,api:backend.api});
+  await login(page);
+  await page.locator('[data-page="sales"]').click();
+  await page.locator('[data-action="new-sale"]').click();
+  await page.locator('#field-sale_date').fill('2030-11-01');
+  await page.locator('#field-unit_price_gs').fill('100');
+  await page.locator('#field-unit_cost_gs').fill('40');
+  await page.locator('#sale-form button[type="submit"]').click();
+  await page.locator('#modal-backdrop').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#report-month').inputValue(),'2030-11');
+  assert.equal(backend.calls.filter(c=>c.path.endsWith('/report_financials')).at(-1).body.p_month,'2030-11-01');
+  assert.equal(await page.locator('#admin-content .metric-grid').count(),1);
+  assert.deepEqual(errors,[]);
+});
+test('a malformed six-month snapshot is rejected without NaN figures or chart values', async t => {
+  const backend=mockBackend('owner',{reportHistoryInvalid:true});
+  const {page,errors}=await open(t,{config:production,api:backend.api});
+  await login(page);
+  await page.locator('[data-page="profits"]').click();
+  await page.waitForFunction(()=>document.querySelector('#admin-content')?.textContent.includes('No se pudo verificar el informe completo'));
+  assert.equal(await page.locator('#admin-content .metric-grid').count(),0);
+  assert.doesNotMatch(await page.locator('#admin-content').innerHTML(),/NaN|150[.\s]?500/);
+  assert.deepEqual(errors,[]);
+});
+test('refresh hides old figures immediately and a late report cannot restore them after logout', async t => {
+  const backend=mockBackend('owner');
+  const {page,errors}=await open(t,{config:production,api:backend.api});
+  await login(page);
+  let release,started;
+  const gate=new Promise(resolve=>{release=resolve});
+  const requested=new Promise(resolve=>{started=resolve});
+  await page.route('**/rest/v1/rpc/report_financials',async route=>{started();await gate;await route.fallback()});
+  await page.locator('[data-page="profits"]').click();
+  await requested;
+  assert.equal(await page.locator('#admin-content .metric-grid').count(),0);
+  assert.match(await page.locator('#admin-content').textContent(),/Calculando el informe completo/);
+  await page.locator('#connection-button').click();
+  await page.locator('#login-logout').click();
+  await page.locator('#login-form').waitFor({state:'visible'});
+  const response=page.waitForResponse(r=>r.url().endsWith('/report_financials'));
+  release();await response;
+  await page.evaluate(()=>new Promise(requestAnimationFrame));
+  assert.equal(await page.locator('#admin-content .metric-grid').count(),0);
+  assert.doesNotMatch(await page.locator('#admin-content').textContent(),/150[.\s]?500|75[.\s]?250/);
+  assert.deepEqual(errors,[]);
 });

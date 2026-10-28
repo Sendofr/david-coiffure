@@ -81,6 +81,7 @@ export async function startStack() {
       '--publish', '127.0.0.1::3000',
       '--env', `PGRST_DB_URI=postgres://authenticator:${password}@${names.db}:5432/postgres`,
       '--env', 'PGRST_DB_SCHEMAS=public', '--env', 'PGRST_DB_ANON_ROLE=anon',
+      '--env', 'PGRST_DB_MAX_ROWS=1000',
       '--env', `PGRST_JWT_SECRET=${secret}`, '--env', 'PGRST_SERVER_PORT=3000', images.rest]);
     const restPort = port(names.rest);
     let restReady = false;
@@ -92,7 +93,8 @@ export async function startStack() {
     proxy = createServer((incoming, outgoing) => {
       // This local gateway stands in for Supabase's API gateway (Kong).
       outgoing.setHeader('Access-Control-Allow-Origin', '*');
-      outgoing.setHeader('Access-Control-Allow-Headers', 'authorization, apikey, content-type, x-client-info, prefer, accept-profile, content-profile, x-supabase-api-version');
+      outgoing.setHeader('Access-Control-Allow-Headers', 'authorization, apikey, content-type, x-client-info, prefer, accept-profile, content-profile, x-supabase-api-version, range, range-unit');
+      outgoing.setHeader('Access-Control-Expose-Headers', 'Content-Range, Range-Unit');
       outgoing.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
       if (incoming.method === 'OPTIONS') { outgoing.writeHead(204); outgoing.end(); return; }
       const authRoute = incoming.url.startsWith('/auth/v1/');
