@@ -82,6 +82,12 @@ function create(context){
  }
  function wire(container){
   const shell=container?.querySelector('.agenda-shell');if(!shell)return;
+  // Keep the selected day visible in the horizontally scrollable mobile week.
+  const scroll=shell.querySelector('.agenda-calendar-scroll');
+  if(view==="week"&&scroll&&scroll.clientWidth<700){
+   const selected=shell.querySelector('[data-agenda-focus="'+date+'"]')?.closest('.agenda-day-column');
+   if(selected)scroll.scrollLeft+=selected.getBoundingClientRect().left-scroll.getBoundingClientRect().left;
+  }
   shell.querySelectorAll('[data-agenda-view]').forEach(button=>button.onclick=()=>{view=button.dataset.agendaView;rerender()});
   shell.querySelectorAll('[data-agenda-focus]').forEach(button=>button.onclick=()=>{date=button.dataset.agendaFocus;view="day";rerender()});
   const dateInput=shell.querySelector('#agenda-date');dateInput.onchange=()=>{if(validDate(dateInput.value)){date=dateInput.value;rerender()}};
@@ -143,30 +149,30 @@ function create(context){
  }
  function wireSchedule(token){
   const host=root.document?.querySelector('.agenda-schedule');if(!host)return;
-  const current=()=>token===generation&&canWrite();
+  const staffId=scheduleStaff,current=()=>token===generation&&canWrite()&&host.isConnected;
   host.querySelector('#agenda-schedule-staff').onchange=event=>showSchedule(event.target.value);
   const rpc=async(name,body)=>result(context.apiClient().rpc(name,body));
   const bind=(id,operation)=>{const form=host.querySelector('#'+id);form.onsubmit=event=>{
    event.preventDefault();if(!current()||pending.has(form))return;
    pending.add(form);const buttons=[...form.querySelectorAll('button[type="submit"]')];buttons.forEach(button=>button.disabled=true);
-   Promise.resolve().then(()=>operation(form)).then(()=>{if(current()){notify("Disponibilidad guardada.");context.onScheduleChange?.();showSchedule(scheduleStaff)}}).catch(error=>{if(current())notify(error.message||"No se pudo guardar. Revisá los turnos existentes antes de repetir.")}).finally(()=>{pending.delete(form);buttons.forEach(button=>button.disabled=false)});
+   Promise.resolve().then(()=>{if(current())return operation(form)}).then(()=>{if(current()){notify("Disponibilidad guardada.");context.onScheduleChange?.();showSchedule(staffId)}}).catch(error=>{if(current())notify(error.message||"No se pudo guardar. Revisá los turnos existentes antes de repetir.")}).finally(()=>{pending.delete(form);buttons.forEach(button=>button.disabled=false)});
   }};
   bind("agenda-public-form",async()=>{
    const enabled=host.querySelector('#agenda-public-enabled').checked;
-   if(live())await result(context.apiClient().from("staff_booking_settings").upsert({staff_id:scheduleStaff,public_enabled:enabled},{onConflict:"staff_id"}));
-   else demoSchedule(scheduleStaff).settings.public_enabled=enabled;
+   if(live())await result(context.apiClient().from("staff_booking_settings").upsert({staff_id:staffId,public_enabled:enabled},{onConflict:"staff_id"}));
+   else demoSchedule(staffId).settings.public_enabled=enabled;
   });
   bind("agenda-schedule-form",async form=>{
    const intervals=[0,1,2,3,4,5,6].flatMap(day=>parseIntervals(form.elements.namedItem('weekday-'+day).value,day));
-   if(live())await rpc("replace_working_hours",{p_staff_id:scheduleStaff,p_intervals:intervals});
-   else demoSchedule(scheduleStaff).weekly=intervals;
+   if(live())await rpc("replace_working_hours",{p_staff_id:staffId,p_intervals:intervals});
+   else demoSchedule(staffId).weekly=intervals;
   });
   bind("agenda-day-form",async()=>{
    const value=host.querySelector('#agenda-day-date').value;if(!validDate(value))throw Error("Elegí una fecha válida.");
    const intervals=host.querySelector('#agenda-day-closed').checked?[]:parseIntervals(host.querySelector('#agenda-day-intervals').value);
    if(!host.querySelector('#agenda-day-closed').checked&&!intervals.length)throw Error("Ingresá al menos un tramo o marcá Cerrar todo este día.");
-   if(live())await rpc("replace_schedule_day",{p_staff_id:scheduleStaff,p_date:value,p_intervals:intervals});
-   else{const schedule=demoSchedule(scheduleStaff);schedule.exceptions=schedule.exceptions.filter(row=>row.date!==value);schedule.exceptions.push(...(intervals.length?intervals:[{start_time:null,end_time:null}]).map(row=>({...row,date:value})))}
+   if(live())await rpc("replace_schedule_day",{p_staff_id:staffId,p_date:value,p_intervals:intervals});
+   else{const schedule=demoSchedule(staffId);schedule.exceptions=schedule.exceptions.filter(row=>row.date!==value);schedule.exceptions.push(...(intervals.length?intervals:[{start_time:null,end_time:null}]).map(row=>({...row,date:value})))}
   });
   const dayClosed=host.querySelector('#agenda-day-closed'),dayIntervals=host.querySelector('#agenda-day-intervals');dayClosed.onchange=()=>dayIntervals.disabled=dayClosed.checked;
   host.querySelector('#agenda-day-date').onchange=event=>{
@@ -174,12 +180,13 @@ function create(context){
    dayClosed.checked=existing.some(row=>row.start_time===null&&row.end_time===null);
    dayIntervals.disabled=dayClosed.checked;dayIntervals.value=intervalsText(existing);
   };
+  host.querySelector('#agenda-day-date').dispatchEvent(new Event("change"));
   for(const [formId,table,key] of [["agenda-timeoff-form","staff_time_off","timeOff"],["agenda-closure-form","salon_closures","closures"]])bind(formId,async form=>{
    const data=Object.fromEntries(new FormData(form).entries());
    if(!validDate(data.start_date)||!validDate(data.end_date)||data.end_date<data.start_date)throw Error("Revisá el rango de fechas.");
-   data.reason=String(data.reason||"").trim()||null;if(table!=="salon_closures")data.staff_id=scheduleStaff;
+   data.reason=String(data.reason||"").trim();if(table!=="salon_closures")data.staff_id=staffId;
    if(live())await result(context.apiClient().from(table).insert(data));
-   else demoSchedule(scheduleStaff)[key].push({...data,id:root.crypto?.randomUUID?.()||String(Date.now())});
+   else demoSchedule(staffId)[key].push({...data,id:root.crypto?.randomUUID?.()||String(Date.now())});
   });
   host.querySelectorAll('[data-agenda-remove]').forEach(button=>button.onclick=()=>{
    if(!current())return;
@@ -187,15 +194,16 @@ function create(context){
     const kind=button.dataset.agendaRemove,table={exception:"staff_schedule_exceptions",timeoff:"staff_time_off",closure:"salon_closures"}[kind];
     if(live()){
      let query=context.apiClient().from(table).delete();
-     if(kind==="exception")query=query.eq("staff_id",scheduleStaff).eq("date",button.dataset.date);else query=query.eq("id",button.dataset.id);
+     if(kind==="exception")query=query.eq("staff_id",staffId).eq("date",button.dataset.date);else query=query.eq("id",button.dataset.id);
      await result(query);
-    }else{const schedule=demoSchedule(scheduleStaff),key={exception:"exceptions",timeoff:"timeOff",closure:"closures"}[kind];schedule[key]=schedule[key].filter(row=>kind==="exception"?row.date!==button.dataset.date:row.id!==button.dataset.id)}
-    if(current()){context.onScheduleChange?.();await showSchedule(scheduleStaff)}
+    }else{const schedule=demoSchedule(staffId),key={exception:"exceptions",timeoff:"timeOff",closure:"closures"}[kind];schedule[key]=schedule[key].filter(row=>kind==="exception"?row.date!==button.dataset.date:row.id!==button.dataset.id)}
+    if(current()){context.onScheduleChange?.();await showSchedule(staffId)}
    });
   });
  }
- function reset(){generation++;view="week";date=today();staffFilter="";scheduleStaff="";scheduleCache=null;demoSchedules.clear()}
- return {render,wire,reset,showSchedule};
+ function cancelSchedule(){generation++}
+ function reset(){cancelSchedule();view="week";date=today();staffFilter="";scheduleStaff="";scheduleCache=null;demoSchedules.clear()}
+ return {render,wire,reset,showSchedule,cancelSchedule};
 }
 const api={create,today,validDate,shiftDate,shiftMonth,weekStart,monthCells,visibleDates,selectAppointments,parseIntervals};
 root.DavidAgenda=api;

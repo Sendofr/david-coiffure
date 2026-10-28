@@ -23,8 +23,8 @@ test('artefacto estático Netlify: build/publicación declarados, recursos200 y 
   assert.match(root.headers.get('content-security-policy'), /connect-src 'self' https:\/\/\*\.supabase\.co/);
   const markup = await root.text();
   const scripts = [...markup.matchAll(/<script\s+src="\.\/([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(scripts, ['config.js', 'vendor/supabase.js', 'auth.js', 'pagination.js', 'app.js']);
-  for (const resource of ['/', '/index.html', '/styles.css', ...scripts.map(s => '/' + s)]) {
+  assert.deepEqual(scripts, ['config.js', 'vendor/supabase.js', 'auth.js', 'pagination.js', 'agenda.js', 'booking.js', 'app.js']);
+  for (const resource of ['/', '/index.html', '/styles.css', '/agenda.css', '/booking.css', ...scripts.map(s => '/' + s)]) {
     const response = await fetch(site.origin + resource);
     assert.equal(response.status, 200, resource);
   }
@@ -49,6 +49,8 @@ for (const width of [360, 390, 768, 1440]) {
     assert.equal(await page.evaluate(() => typeof supabase.createClient), 'function');
     assert.equal(await page.evaluate(() => typeof DavidAuth.resolveConfig), 'function');
     assert.equal(await page.evaluate(() => typeof DavidPagination.fetchAll), 'function');
+    assert.equal(await page.evaluate(() => typeof DavidAgenda.create), 'function');
+    assert.equal(await page.evaluate(() => typeof DavidBooking.init), 'function');
     assert.equal(await page.locator('#service-grid .service-tile').count(), 6);
     await page.locator(width <= 760 ? '.mobile-shortcut-book' : '.header-actions a').click();
     assert.equal(new URL(page.url()).hash, '#reservar');

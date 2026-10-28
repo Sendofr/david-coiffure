@@ -8,6 +8,7 @@ import { serveSite, fixtureSupabaseUrl, routeStack } from './static-site.mjs';
 
 let stack, server, browser, origin;
 const accounts = {};
+const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const staffA = '30000000-0000-0000-0000-000000000001';
 const staffB = '30000000-0000-0000-0000-000000000002';
 const productId = '40000000-0000-0000-0000-000000000001';
@@ -30,8 +31,8 @@ before(async () => {
     ('${accounts.stylist.id}','Estilista','stylist','${staffA}');
     insert into public.services(name,price_gs) values ('Servicio real local',100000);
     insert into public.appointments(client_name,client_phone,staff_id,appointment_date,start_time,end_time,status) values
-    ('Cita asignada A','000000001','${staffA}','2026-10-28','10:00','11:00','confirmado'),
-    ('Cita asignada B','000000002','${staffB}','2026-10-28','10:00','11:00','confirmado');
+    ('Cita asignada A','000000001','${staffA}','${businessDate}','10:00','11:00','confirmado'),
+    ('Cita asignada B','000000002','${staffB}','${businessDate}','10:00','11:00','confirmado');
     insert into public.products(id,name,sku,category,cost_gs,sale_price_gs) values
     ('${productId}','Producto prueba navegador','BROWSER-LOCAL','Venta',65000,110000);`);
   const seedClient = createClient(stack.url, stack.anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -120,7 +121,9 @@ test('stylist en navegador solo recibe agenda asignada y no consulta finanzas', 
   const { page, errors } = await open(t, 'stylist');
   await page.locator('[data-page="appointments"]').waitFor();
   await page.locator('[data-page="appointments"]').click();
-  await page.locator('#admin-content tbody tr').filter({ hasText: 'Cita asignada A' }).waitFor();
+  await page.locator('#agenda-date').fill(businessDate);
+  await page.locator('#agenda-date').dispatchEvent('change');
+  await page.locator('.agenda-card').filter({ hasText: 'Cita asignada A' }).waitFor();
   const content = await page.locator('#admin-content').textContent();
   assert.ok(content.includes('Cita asignada A'));
   assert.ok(!content.includes('Cita asignada B'));

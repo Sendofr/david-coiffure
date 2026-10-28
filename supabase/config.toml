@@ -32,3 +32,9 @@ enable_confirmations = true
 
 [analytics]
 enabled = false
+
+# Solicitudes sin cuenta de cliente. El handler exige origen exacto, Turnstile,
+# validación y límites persistentes; solo el backend puede ejecutar request_booking.
+# Los datos administrativos conservan Auth/RLS. No es un bypass para otras funciones.
+[functions.booking]
+verify_jwt = false

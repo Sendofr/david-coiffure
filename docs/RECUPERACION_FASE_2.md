@@ -1,5 +1,9 @@
 # Recuperación del avance de Fase 2
 
+> Informe histórico del checkpoint `e4a7fa2`. La continuación y su evidencia se
+> registran en [VALIDACION_FASE_2.md](VALIDACION_FASE_2.md). Los fallos y pendientes
+> de este archivo describen el estado recuperado, no el estado posterior.
+
 Revisión del 28 de octubre de 2026. Este archivo describe un **checkpoint
 incompleto**, no una entrega lista para desplegar. Se conservó el contenido de
 los archivos recuperados, sin reiniciar la implementación ni completar sus

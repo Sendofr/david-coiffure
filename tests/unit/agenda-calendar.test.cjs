@@ -52,3 +52,28 @@ test('stylist calendar contains no write controls and filters private rows to as
  assert.doesNotMatch(markup,/<img|onerror=alert/);
  assert.doesNotMatch(markup,/value="p1"/);
 });
+test('closing the schedule invalidates its pending read instead of reopening a modal',async()=>{
+ const previous=globalThis.DavidPagination;
+ let finish;const settings=new Promise(resolve=>finish=resolve),modals=[];
+ globalThis.DavidPagination={fetchAll:async()=>[]};
+ const client={from:()=>({select:()=>({eq:()=>({maybeSingle:()=>settings})})})};
+ try{
+  const calendar=agenda.create(context({isLive:()=>true,apiClient:()=>client,modal:(title,body)=>modals.push({title,body})}));
+  const read=calendar.showSchedule('p1');
+  calendar.cancelSchedule();finish({data:{public_enabled:false},error:null});await read;
+  assert.equal(modals.length,1);assert.match(modals[0].body,/Cargando disponibilidad/);
+ }finally{globalThis.DavidPagination=previous}
+});
+test('switching professionals ignores a late response for the previous schedule',async()=>{
+ const previous=globalThis.DavidPagination,reads=new Map(),modals=[];
+ globalThis.DavidPagination={fetchAll:async()=>[]};
+ const client={from:()=>({select:()=>({eq:(_,id)=>({maybeSingle:()=>new Promise(resolve=>reads.set(id,resolve))})})})};
+ try{
+  const calendar=agenda.create(context({isLive:()=>true,apiClient:()=>client,modal:(title,body)=>modals.push({title,body})}));
+  const first=calendar.showSchedule('p1'),second=calendar.showSchedule('p2');
+  reads.get('p2')({data:{public_enabled:true},error:null});await second;
+  const count=modals.length;assert.match(modals.at(-1).body,/value="p2" selected/);
+  reads.get('p1')({data:{public_enabled:false},error:null});await first;
+  assert.equal(modals.length,count);
+ }finally{globalThis.DavidPagination=previous}
+});

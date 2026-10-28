@@ -56,7 +56,7 @@ const persist=()=>{if(!isLive())localStorage.setItem(demoKey,JSON.stringify(stat
 let page="dashboard",search="",filter="todos",userProfile=null,reportMonth=today().slice(0,7);
 let session=null,client=null,authSubscription=null,generation=0,loadSequence=0,loading=false,liveError="";
 let clientReady=Promise.resolve();
-let agenda=null,bookingWidget=null,agendaRefreshInFlight=false;
+let agenda=null,bookingWidget=null,agendaRefreshTask=null,appointmentReadSequence=0;
 let financialReport=null,financialError="",financialBusy=false,financialSequence=0,collectionSequence=0;
 let dataReads=new AbortController();
 // Discard the legacy hand-rolled session; the SDK owns refresh and storage.
@@ -70,7 +70,7 @@ async function submitOnce(form,action){
 function clearPrivateState(){agenda?.reset();dataReads.abort();dataReads=new AbortController();financialSequence++;collectionSequence++;financialReport=null;financialBusy=false;financialError="";generation++;loadSequence++;state=emptyState();userProfile=null;loading=false;page="dashboard";search="";closeModal()}
 const toast=msg=>{const t=$("#toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3100)};
 const modal=(title,body)=>{$("#modal-title").textContent=title;$("#modal-body").innerHTML=body;$("#modal-backdrop").hidden=false};
-const closeModal=()=>{$("#modal-backdrop").hidden=true;$("#modal-body").innerHTML=""};
+const closeModal=()=>{agenda?.cancelSchedule?.();$("#modal-backdrop").hidden=true;$("#modal-body").innerHTML=""};
 $("#modal-close").onclick=closeModal;
 $("#modal-backdrop").addEventListener("click",e=>{if(e.target.id==="modal-backdrop")closeModal()});
 $("#year").textContent=new Date().getFullYear();
@@ -215,7 +215,7 @@ function renderStaff(){
  return title("Equipo profesional","Organizá quiénes forman parte del equipo.","Nuevo profesional","new-staff")+toolbar()+panel("Profesionales",rows.length?table(["NOMBRE","ESPECIALIDAD","ACTIVO",""],rows):'<div class="empty">Todavía no hay profesionales registrados.</div>');
 }
 function renderSettings(){
- return title("Configuración","Conexión, seguridad y datos del salón.")+panel("Estado de la plataforma",'<div class="kpi-row"><span>Modo actual</span><strong>'+(isLive()?"Supabase":"Demostración local")+'</strong></div><div class="kpi-row"><span>Datos administrativos</span><strong>'+(isLive()?"Controlados por RLS":"Ficticios en navegador")+'</strong></div><div class="kpi-row"><span>Contacto público</span><strong>+595 985 499769</strong></div><div class="kpi-row"><span>Reservas desde la web</span><strong>Solicitud por WhatsApp</strong></div><div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:23px"><button class="admin-action" data-action="connect">'+(isLive()?"Administrar Supabase":"Conectar Supabase")+'</button>'+(isLive()?'<button class="admin-outline" data-action="logout">Cerrar sesión</button>':'<button class="admin-outline" data-action="reset-demo">Restaurar datos demo</button>')+'</div>')+'<div class="admin-footer-note">Importante: esta versión no genera comprobantes tributarios, no cobra online ni envía recordatorios automáticos. La solicitud pública por WhatsApp no bloquea ningún turno.</div>';
+ return title("Configuración","Conexión, seguridad y datos del salón.")+panel("Estado de la plataforma",'<div class="kpi-row"><span>Modo actual</span><strong>'+(isLive()?"Supabase":"Demostración local")+'</strong></div><div class="kpi-row"><span>Datos administrativos</span><strong>'+(isLive()?"Controlados por RLS":"Ficticios en navegador")+'</strong></div><div class="kpi-row"><span>Contacto público</span><strong>+595 985 499769</strong></div><div class="kpi-row"><span>Reservas desde la web</span><strong>'+(isLive()?"Solicitudes pendientes · requieren configuración":"Solicitudes simuladas · DEMO")+'</strong></div><div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:23px"><button class="admin-action" data-action="connect">'+(isLive()?"Administrar Supabase":"Conectar Supabase")+'</button>'+(isLive()?'<button class="admin-outline" data-action="logout">Cerrar sesión</button>':'<button class="admin-outline" data-action="reset-demo">Restaurar datos demo</button>')+'</div>')+'<div class="admin-footer-note">Importante: esta versión no genera comprobantes tributarios, no cobra online ni envía recordatorios automáticos. Las solicitudes guardadas ocupan su horario hasta que el equipo las gestione. Un mensaje de WhatsApp no confirma una cita.</div>';
 }
 function renderAdmin(){
  if(isLive()&&!canWrite()&&!["dashboard","appointments","services","staff","settings"].includes(page))page="dashboard";
@@ -416,6 +416,7 @@ async function registerSale(data){
 }
 async function fetchCollections(){
  const token=generation,sequence=++collectionSequence,activeClient=client,signal=dataReads.signal;
+ const appointmentSequence=++appointmentReadSequence;
  financialSequence++;financialReport=null;financialError="";financialBusy=userProfile?.role!=="stylist";renderAdmin();
  const tables=userProfile?.role==="stylist"?["services","staff","appointments"]:["services","staff","clients","appointments","products","stock_movements","sales","expenses"];
  const next=emptyState();
@@ -423,28 +424,39 @@ async function fetchCollections(){
   const output=await Promise.all(tables.map(x=>window.DavidPagination.fetchAll(activeClient,x,{signal})));
   if(token!==generation||sequence!==collectionSequence)throw Error("La sesión o la consulta cambió.");
   tables.forEach((x,i)=>next[x]=Array.isArray(output[i])?output[i]:[]);
+  // A newer agenda read may already include a just-saved appointment.
+  if(appointmentSequence!==appointmentReadSequence)next.appointments=state.appointments;
   state=next;
   if(userProfile?.role!=="stylist")await refreshFinancialReport();
  }catch(error){if(token===generation&&sequence===collectionSequence){clearPrivateState();liveError="No se pudieron actualizar los datos. Comprobá la conexión y volvé a ingresar. Si guardaste una operación, verificá su historial antes de repetirla.";renderAdmin()}throw error}
 }
 async function refreshAgenda(){
  if(!isLive()){renderAdmin();return}
- if(agendaRefreshInFlight||!client||!userProfile)return;
- const token=generation,activeClient=client;
- agendaRefreshInFlight=true;
- try{
-  const profiles=await apiRequest("profiles?select=id,role,display_name,staff_id&id=eq."+encodeURIComponent(userProfile.id));
-  if(token!==generation)return;
-  const profile=profiles?.[0];
-  if(!profile)throw Error("Tu cuenta ya no tiene acceso a la agenda.");
-  if(profile.role!==userProfile.role||profile.staff_id!==userProfile.staff_id){clearPrivateState();await loadLive();return}
-  const appointments=await window.DavidPagination.fetchAll(activeClient,"appointments",{signal:dataReads.signal});
-  if(token!==generation||activeClient!==client)return;
-  state={...state,appointments};renderAdmin();
- }catch(error){
-  if(token===generation){clearPrivateState();liveError="No se pudo verificar la agenda. Actualizá el acceso y comprobá la conexión.";renderAdmin()}
-  throw error;
- }finally{agendaRefreshInFlight=false}
+ if(!client||!userProfile)return;
+ if(agendaRefreshTask?.generation===generation&&agendaRefreshTask.client===client){
+  // A save during an older read needs a second read before its caller continues.
+  agendaRefreshTask.queued=true;return agendaRefreshTask.promise;
+ }
+ const task={generation,client,queued:false,promise:null};agendaRefreshTask=task;
+ task.promise=(async()=>{
+  try{
+   do{
+    task.queued=false;
+    const profileId=userProfile?.id,sequence=++appointmentReadSequence;
+    const profiles=await apiRequest("profiles?select=id,role,display_name,staff_id&id=eq."+encodeURIComponent(profileId));
+    if(task.generation!==generation||task.client!==client)return;
+    const profile=profiles?.[0];
+    if(!profile)throw Error("Tu cuenta ya no tiene acceso a la agenda.");
+    if(profile.role!==userProfile.role||profile.staff_id!==userProfile.staff_id){clearPrivateState();await loadLive();return}
+    const appointments=await window.DavidPagination.fetchAll(task.client,"appointments",{signal:dataReads.signal});
+    if(task.generation!==generation||task.client!==client)return;
+    if(sequence===appointmentReadSequence){state={...state,appointments};renderAdmin()}
+   }while(task.queued);
+  }catch(error){
+   if(task.generation===generation){clearPrivateState();liveError="No se pudo verificar la agenda. Actualizá el acceso y comprobá la conexión.";renderAdmin()}
+   throw error;
+  }finally{if(agendaRefreshTask===task)agendaRefreshTask=null}
+ })();return task.promise;
 }
 async function loadLive(promptLogin=false){
  if(!isLive())return;
@@ -544,6 +556,7 @@ agenda=window.DavidAgenda.create({
  getState:()=>state,canWrite,getProfile:()=>userProfile,isLive,
  apiClient:()=>client,toast,modal,closeModal,escapeHTML,
  onRender:()=>renderAdmin(),refresh:refreshAgenda,
+ onScheduleChange:()=>bookingWidget?.refresh(),
  openEdit:recordId=>editDialog("appointments",recordId),
  saveAppointment:async(recordId,body)=>{
   if(isLive()){
@@ -554,10 +567,16 @@ agenda=window.DavidAgenda.create({
 });
 bookingWidget=window.DavidBooking.init({
  getClient:()=>client,getMode:()=>settings.mode,getServices:()=>isLive()?publicCatalog:state.services,
+ getProject:()=>settings.url,
  getDemoStaff:()=>state.staff,getDemoAppointments:()=>state.appointments,
  config:()=>window.DAVID_CONFIG,
  createDemoBooking:async fields=>{
   if(isLive())throw Error("No se puede guardar una reserva real en la demostración.");
+  const previous=state.appointments.find(a=>a.id===fields.request_id);
+  if(previous){
+   if(previous.client_name!==fields.name||previous.client_phone!==fields.phone||previous.service_id!==fields.service_id||previous.staff_id!==fields.staff_id||previous.appointment_date!==fields.date||previous.start_time!==fields.time)throw Error("La referencia demo ya corresponde a otra solicitud.");
+   return {reference:fields.request_id,status:"pendiente"};
+  }
   const service=state.services.find(s=>s.id===fields.service_id),professional=state.staff.find(p=>p.id===fields.staff_id);
   if(!service||!professional)throw Error("Seleccioná un servicio y profesional de demostración.");
   const minutes=Number(fields.time.slice(0,2))*60+Number(fields.time.slice(3,5))+Number(service.duration_minutes);

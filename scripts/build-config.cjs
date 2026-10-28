@@ -3,18 +3,23 @@ const { writeFileSync } = require('node:fs');
 const { validatePublicConfig } = require('../dist/auth.js');
 
 function publicConfig(env) {
-  if (env.NETLIFY === 'true' && !env.DAVID_MODE) throw Error('Netlify requiere DAVID_MODE explícito: production o demo.');
+  const host = env.NETLIFY === 'true' ? 'Netlify' : env.VERCEL === '1' ? 'Vercel' : '';
+  if (host && !env.DAVID_MODE) throw Error(host + ' requiere DAVID_MODE explícito: production o demo.');
   const mode = env.DAVID_MODE || 'demo';
   const config = {
     mode,
     supabaseUrl: env.SUPABASE_URL || '',
-    supabasePublishableKey: env.SUPABASE_PUBLISHABLE_KEY || ''
+    supabasePublishableKey: env.SUPABASE_PUBLISHABLE_KEY || '',
+    bookingTurnstileSiteKey: (env.BOOKING_TURNSTILE_SITE_KEY || '').trim()
   };
   if (!['demo', 'production'].includes(mode)) throw Error('DAVID_MODE debe ser demo o production.');
+  if (config.bookingTurnstileSiteKey && !/^[A-Za-z0-9_-]{20,100}$/.test(config.bookingTurnstileSiteKey)) {
+    throw Error('BOOKING_TURNSTILE_SITE_KEY debe ser la site key pública del widget Turnstile.');
+  }
   if (mode === 'production') {
     validatePublicConfig(config);
-    if (env.NETLIFY === 'true' && new URL(config.supabaseUrl).protocol !== 'https:') {
-      throw Error('Netlify requiere la URL HTTPS del proyecto alojado; no usar localhost.');
+    if (host && new URL(config.supabaseUrl).protocol !== 'https:') {
+      throw Error(host + ' requiere la URL HTTPS del proyecto alojado; no usar localhost.');
     }
   }
   else if (config.supabaseUrl || config.supabasePublishableKey) {

@@ -3,15 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22"
+    "node": "24.x"
   },
   "scripts": {
     "build": "node scripts/build-sdk.cjs",
     "build:config": "node --env-file-if-exists=.env scripts/build-config.cjs",
-    "check": "node --check dist/app.js && node --check dist/auth.js && node --check dist/pagination.js && node --check dist/config.js",
+    "check": "node --check dist/app.js && node --check dist/auth.js && node --check dist/pagination.js && node --check dist/agenda.js && node --check dist/booking.js && node --check dist/config.js && node --check supabase/functions/booking/handler.mjs && node --check supabase/functions/booking/index.ts && node --check scripts/build-config.cjs",
     "test": "node --test tests/unit/*.test.cjs",
     "test:browser": "node --test tests/browser/*.test.cjs",
     "test:db": "bash scripts/test-db.sh",
+    "test:db:agenda": "bash scripts/test-agenda-db.sh",
     "test:integration": "bash scripts/test-integration.sh",
     "dev": "python3 -m http.server 8000 --bind 127.0.0.1 --directory dist"
   },

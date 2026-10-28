@@ -3,12 +3,11 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createClient } from '@supabase/supabase-js';
-import { chromium } from 'playwright';
 import { startStack } from './stack.mjs';
-import { serveSite, fixtureSupabaseUrl, routeStack } from './static-site.mjs';
+import { serveSite, fixtureSupabaseUrl } from './static-site.mjs';
 import { createBookingHandler } from '../../supabase/functions/booking/handler.mjs';
 
-let stack, site, browser, edgeServer, edgeOrigin, verifyCount = 0, sequence = 0;
+let stack, site, edgeServer, edgeOrigin, verifyCount = 0, sequence = 0;
 const accounts = {}, clients = {};
 const staffA = randomUUID(), staffB = randomUUID(), staffInactive = randomUUID(), staffPrivate = randomUUID();
 const service60 = randomUUID(), service120 = randomUUID(), serviceInactive = randomUUID();
@@ -91,10 +90,9 @@ before(async () => {
   });
   await new Promise(resolve => edgeServer.listen(0, '127.0.0.1', resolve));
   edgeOrigin = 'http://127.0.0.1:' + edgeServer.address().port;
-  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined, headless: true });
 }, { timeout: 180_000 });
 after(async () => {
-  await browser?.close(); await site?.close();
+  await site?.close();
   if (edgeServer) await new Promise(resolve => edgeServer.close(resolve));
   for (const role of ['owner','manager','stylist','unprofiled']) await clients[role]?.auth.signOut({ scope: 'local' });
   await stack?.close();
@@ -124,7 +122,9 @@ test('disponibilidad real calcula duración, intervalos de15 minutos, descanso, 
   assert.deepEqual(ok(await slots(dates[0], service60, staffInactive)), []);
   assert.deepEqual(ok(await slots(dates[0], serviceInactive)), []);
   assert.deepEqual(ok(await slots(addDays(91))), []);
-  const inTokyo = JSON.parse(stack.sql(`set timezone='Asia/Tokyo'; select coalesce(json_agg(t),'[]') from public.available_slots('${staffA}','${service60}','${dates[0]}') t;`).split('\n').at(-1));
+  // json_agg(record) includes newlines between records in psql's text output.
+  // jsonb_agg serializes one complete JSON value on the last line, after SET.
+  const inTokyo = JSON.parse(stack.sql(`set timezone='Asia/Tokyo'; select coalesce(jsonb_agg(t),'[]'::jsonb) from public.available_slots('${staffA}','${service60}','${dates[0]}') t;`).split('\n').at(-1));
   assert.deepEqual(inTokyo, short, 'Business availability must use America/Asuncion, independent of session timezone');
 });
 
@@ -144,6 +144,17 @@ test('solicitud pendiente persistida reserva su intervalo; reintento idempotente
   assert.equal(events[0].actor_id, null);
 });
 
+test('la base vuelve a validar anticipación, fecha, grilla y publicación sin confiar en el formulario', async () => {
+  for (const changes of [
+    { date: addDays(-1) }, { date: businessToday, time: '00:00' },
+    { date: addDays(91) }, { staff: staffPrivate }, { staff: staffInactive }, { service: serviceInactive }
+  ]) {
+    assert.equal((await clients.gateway.rpc('request_booking', bookingArgs(changes))).error?.code, '23514');
+  }
+  assert.equal((await clients.gateway.rpc('request_booking', bookingArgs({ time: '13:10' }))).error?.code, '22023');
+  assert.deepEqual(ok(await slots(addDays(-1))), []);
+});
+
 test('solicitudes simultáneas con diferentes duraciones no se superponen; otro profesional puede atender', async () => {
   const result = await Promise.all([
     clients.gateway.rpc('request_booking', bookingArgs({ date: dates[6], service: service120, time: '16:00', name: 'Cliente Largo Concurrente' })),
@@ -154,6 +165,70 @@ test('solicitudes simultáneas con diferentes duraciones no se superponen; otro 
   ok(await clients.gateway.rpc('request_booking', bookingArgs({ date: dates[6], staff: staffB, time: '17:00', name: 'Cliente Otro Profesional' })));
   const rows = ok(await clients.owner.from('appointments').select('id').eq('appointment_date', dates[6]));
   assert.equal(rows.length, 2);
+});
+
+test('altas administrativas pendientes simultáneas comparten el bloqueo del profesional', async () => {
+  // Pending rows are deliberately outside the legacy exclusion constraint.
+  // This exercises the new trigger/staff lock, independently of the public rate lock.
+  const attempts = await Promise.all(Array.from({ length: 4 }, (_, index) =>
+    clients.manager.from('appointments').insert(teamAppointment(dates[22], {
+      client_name: 'Cliente Administrativo Concurrente ' + index, status: 'pendiente',
+      service_id: index % 2 ? service120 : service60
+    })).select('id')));
+  assert.equal(attempts.filter(result => !result.error).length, 1);
+  assert.equal(attempts.filter(result => result.error?.code === '23P01').length, 3);
+  assert.equal(ok(await clients.manager.from('appointments').select('id').eq('appointment_date', dates[22])).length, 1);
+});
+
+test('reservas públicas simultáneas del mismo inicio y reintentos del mismo UUID son atómicos', async () => {
+  const contenders = await Promise.all(Array.from({ length: 3 }, () =>
+    clients.gateway.rpc('request_booking', bookingArgs({ date: dates[23] }))));
+  assert.equal(contenders.filter(result => !result.error).length, 1);
+  assert.equal(contenders.filter(result => result.error?.code === '23P01').length, 2);
+  const args = bookingArgs({ date: dates[24], name: 'Cliente Reintento Concurrente' });
+  const replay = await Promise.all([
+    clients.gateway.rpc('request_booking', args), clients.gateway.rpc('request_booking', args)
+  ]);
+  assert.deepEqual(ok(replay[0]), ok(replay[1]));
+  const row = await appointment(args.p_name);
+  assert.equal(ok(await clients.manager.from('appointment_events').select('id').eq('appointment_id', row.id)).length, 1);
+});
+
+test('cierre de salón concurrente con solicitud nunca deja una cita activa dentro de un cierre', async () => {
+  const [booking, closure] = await Promise.all([
+    clients.gateway.rpc('request_booking', bookingArgs({ date: dates[25] })),
+    clients.manager.from('salon_closures').insert({ start_date: dates[25], end_date: dates[25], reason: 'Cierre concurrente' })
+  ]);
+  assert.equal([booking, closure].filter(result => !result.error).length, 1);
+  assert.equal([booking, closure].filter(result => result.error?.code === '23514').length, 1);
+  const appointments = ok(await clients.manager.from('appointments').select('id').eq('appointment_date', dates[25]));
+  const closures = ok(await clients.manager.from('salon_closures').select('id').eq('start_date', dates[25]));
+  assert.equal(appointments.length + closures.length, 1);
+});
+
+test('Edge local verifica CAPTCHA y persiste mediante la RPC privada sin duplicar el reintento', async () => {
+  const body = { request_id: randomUUID(), name: 'Cliente Edge Persistente', phone: '0985 123456',
+    service_id: service60, staff_id: staffA, date: dates[26], time: '13:00',
+    captcha_token: 'local-widget-token-initial', website: '' };
+  const submit = value => fetch(edgeOrigin + '/functions/v1/booking', { method: 'POST',
+    headers: { Origin: site.origin, 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  const first = await submit(body);
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), { reference: body.request_id, status: 'pendiente' });
+  const retry = await submit({ ...body, captcha_token: 'local-widget-token-retry' });
+  assert.equal(retry.status, 200);
+  assert.deepEqual(await retry.json(), { reference: body.request_id, status: 'pendiente' });
+  assert.equal((await appointment(body.name)).status, 'pendiente');
+  const invalid = await submit({ ...body, request_id: randomUUID(), captcha_token: 'invalid-captcha' });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error, 'CAPTCHA_FAILED');
+  const conflict = await submit({ ...body, request_id: randomUUID(), phone: '0985 123457' });
+  assert.equal(conflict.status, 409);
+  const error = await conflict.json();
+  assert.equal(error.error, 'CONFLICT');
+  assert.ok(!JSON.stringify(error).includes(body.name));
+  assert.equal(verifyCount, 4);
+  assert.equal(ok(await clients.manager.from('appointments').select('id').eq('client_name', body.name)).length, 1);
 });
 
 test('manager confirma, reprograma con duración autoritativa y cancela liberando el horario', async () => {
@@ -214,4 +289,88 @@ test('límites atómicos por teléfono e IP rechazan exceso sin crear citas', as
   assert.equal(overIp.error?.code, 'P0001');
   assert.equal(ok(await clients.owner.from('appointments').select('id').eq('client_name', 'Cliente Límite Teléfono')).length, 3);
   assert.equal(ok(await clients.owner.from('appointments').select('id').eq('client_name', 'Cliente Límite IP')).length, 5);
+});
+
+test('regresión Fase 1 con agenda instalada: venta concurrente, stock, costo histórico, gastos e informes por rol', async () => {
+  const productId = randomUUID();
+  ok(await clients.owner.from('products').insert({ id: productId, name: 'Producto regresión agenda',
+    sku: 'AGENDA-' + productId, category: 'Venta', cost_gs: 65000, sale_price_gs: 110000 }));
+  ok(await clients.owner.rpc('record_stock_movement', { p_product_id: productId, p_delta_qty: 1,
+    p_kind: 'entrada', p_note: 'Stock local de regresión' }));
+  const sale = { p_kind: 'producto', p_product_id: productId, p_service_id: null,
+    p_sale_date: businessToday, p_quantity: 1, p_unit_price_gs: 110000, p_unit_cost_gs: 1,
+    p_payment_method: 'Efectivo', p_customer_name: 'Cliente regresión agenda', p_notes: '' };
+  const results = await Promise.all([
+    clients.owner.rpc('register_sale', sale), clients.manager.rpc('register_sale', sale)
+  ]);
+  assert.equal(results.filter(result => !result.error).length, 1);
+  assert.equal(results.filter(result => result.error?.code === '23514').length, 1);
+  assert.equal(ok(await clients.manager.from('products').select('stock_qty').eq('id', productId).single()).stock_qty, 0);
+  const sales = ok(await clients.owner.from('sales').select('*').eq('product_id', productId));
+  assert.equal(sales.length, 1);
+  assert.equal(sales[0].unit_cost_gs, 65000, 'El costo histórico se toma del producto, no del navegador');
+  const movements = ok(await clients.owner.from('stock_movements').select('*').eq('product_id', productId));
+  assert.equal(movements.length, 2);
+  assert.equal(movements.reduce((sum, movement) => sum + movement.delta_qty, 0), 0);
+  ok(await clients.manager.from('expenses').insert({ expense_date: businessToday, category: 'Operativo',
+    description: 'Gasto local de regresión', amount_gs: 10000 }));
+  const month = businessToday.slice(0, 7) + '-01';
+  for (const role of ['owner', 'manager']) {
+    const report = ok(await clients[role].rpc('report_financials', { p_month: month }));
+    assert.equal(report.salesCount, 1);
+    assert.equal(report.revenue, 110000);
+    assert.equal(report.directCosts, 65000);
+    assert.equal(report.overhead, 10000);
+    assert.equal(report.balance, 35000);
+    denied(await clients[role].from('products').update({ stock_qty: 99 }).eq('id', productId));
+    denied(await clients[role].from('sales').delete().eq('product_id', productId));
+    denied(await clients[role].from('stock_movements').delete().eq('product_id', productId));
+  }
+  for (const role of ['anon', 'stylist', 'unprofiled']) {
+    for (const table of ['products', 'sales', 'stock_movements', 'expenses', 'clients']) {
+      const result = await clients[role].from(table).select('*');
+      if (role === 'anon') denied(result); else assert.deepEqual(ok(result), []);
+    }
+    denied(await clients[role].rpc('register_sale', sale));
+    denied(await clients[role].rpc('record_stock_movement', { p_product_id: productId, p_delta_qty: 1, p_kind: 'entrada' }));
+    assert.equal((await clients[role].rpc('report_financials', { p_month: month })).error?.code, '42501');
+  }
+});
+
+test('matriz RLS de configuración nueva: owner y manager escriben, stylist solo lee lo propio y auditoría no admite escritura', async () => {
+  ok(await clients.owner.rpc('replace_schedule_day', { p_staff_id: staffB, p_date: dates[29],
+    p_intervals: [{ start_time: '13:00', end_time: '15:00' }] }));
+  ok(await clients.owner.from('staff_time_off').insert({ staff_id: staffB, start_date: dates[30], end_date: dates[30] }));
+  ok(await clients.owner.from('salon_closures').insert({ start_date: dates[31], end_date: dates[31] }));
+  ok(await clients.owner.from('staff_booking_settings').update({ public_enabled: true }).eq('staff_id', staffPrivate));
+  ok(await clients.owner.rpc('replace_working_hours', { p_staff_id: staffPrivate,
+    p_intervals: [{ weekday: 1, start_time: '10:00', end_time: '12:00' }] }));
+  const privateTables = ['staff_booking_settings', 'staff_working_hours', 'staff_schedule_exceptions', 'staff_time_off'];
+  for (const table of [...privateTables, 'salon_closures']) {
+    for (const role of ['owner', 'manager']) assert.ok(ok(await clients[role].from(table).select('*')).length > 0);
+    denied(await clients.anon.from(table).select('*'));
+    assert.deepEqual(ok(await clients.unprofiled.from(table).select('*')), []);
+    const own = ok(await clients.stylist.from(table).select('*'));
+    assert.ok(own.length > 0);
+    if (table !== 'salon_closures') assert.ok(own.every(row => row.staff_id === staffA));
+  }
+  for (const [table, body] of [
+    ['staff_booking_settings', { staff_id: staffPrivate, public_enabled: true }],
+    ['staff_working_hours', { staff_id: staffA, weekday: 1, start_time: '10:00', end_time: '12:00' }],
+    ['staff_schedule_exceptions', { staff_id: staffA, date: dates[32] }],
+    ['staff_time_off', { staff_id: staffA, start_date: dates[32], end_date: dates[32] }],
+    ['salon_closures', { start_date: dates[32], end_date: dates[32] }]
+  ]) {
+    for (const role of ['stylist', 'unprofiled']) denied(await clients[role].from(table).insert(body));
+    const before = ok(await clients.stylist.from(table).select('*'));
+    const updated = await clients.stylist.from(table).update(body).eq('id' in before[0] ? 'id' : 'staff_id', before[0].id || before[0].staff_id).select();
+    assert.ok(updated.error || updated.data.length === 0);
+    const removed = await clients.stylist.from(table).delete().eq('id' in before[0] ? 'id' : 'staff_id', before[0].id || before[0].staff_id).select();
+    assert.ok(removed.error || removed.data.length === 0);
+    assert.deepEqual(ok(await clients.stylist.from(table).select('*')), before);
+  }
+  for (const role of ['owner', 'manager', 'stylist', 'unprofiled']) {
+    denied(await clients[role].from('appointment_events').update({ source: 'team' }).neq('id', '00000000-0000-0000-0000-000000000000'));
+    denied(await clients[role].from('appointment_events').delete().neq('id', '00000000-0000-0000-0000-000000000000'));
+  }
 });

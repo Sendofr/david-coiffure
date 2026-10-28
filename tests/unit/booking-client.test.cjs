@@ -21,6 +21,10 @@ test('validation rejects invalid dates, unavailable horizon, identifiers, contac
  assert.equal(requestFields({...fields,date:'2027-01-26'},{today:'2026-10-28'}).date,'2027-01-26');
  assert.equal(requestFields({...fields,service_id:'s1',staff_id:'demo-professional'},{today:'2026-10-28',demo:true}).service_id,'s1');
 });
+test('name validation agrees with the server and rejects invisible controls and markup',()=>{
+ for(const name of ['Ana\nGómez','Ana\u200bGómez','<script>','Ana 123'])assert.throws(()=>requestFields({...fields,name},{today:'2026-10-28'}));
+ for(const name of ["María-José D’Angelo","O'Connor",'李 明'])assert.equal(requestFields({...fields,name},{today:'2026-10-28'}).name,name);
+});
 test('slots are validated, unique and sorted; malformed responses never become fake availability',()=>{
  assert.deepEqual(normalizeSlots([{start_time:'15:00',end_time:'16:00'},{start_time:'13:30',end_time:'14:00'}]),[{start_time:'13:30',end_time:'14:00'},{start_time:'15:00',end_time:'16:00'}]);
  for(const response of [null,[{start_time:'10:00',end_time:'09:00'}],[{start_time:'10:00',end_time:'11:00'},{start_time:'10:00',end_time:'12:00'}],[{start_time:'10:00:00',end_time:'11:00:00'}]])assert.throws(()=>normalizeSlots(response));

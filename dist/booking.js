@@ -19,7 +19,7 @@ function normalizePhone(input){
 }
 function requestFields(values,{demo=false,today=businessDate()}={}){
  const name=String(values.name||"").normalize("NFC").trim().replace(/\s+/g," ");
- if(name.length<2||name.length>100)throw Error("Ingresá tu nombre, entre 2 y 100 caracteres.");
+ if(/[\p{Cc}\p{Cf}]/u.test(String(values.name||""))||name.length<2||name.length>100||!/^[\p{L}\p{M}][\p{L}\p{M} .’'-]*$/u.test(name))throw Error("Ingresá tu nombre, entre 2 y 100 caracteres, usando letras y signos de nombre.");
  const phone=normalizePhone(values.phone);
  const date=String(values.date||"");
  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date+"T12:00:00Z"))||new Date(date+"T12:00:00Z").toISOString().slice(0,10)!==date||date<today||date>plusDays(today,90))throw Error("Elegí una fecha disponible dentro de los próximos 90 días.");
@@ -65,18 +65,28 @@ function init(options){
  if(!form)return {refresh:async()=>{},destroy(){}};
  const requireField=selector=>{const element=form.querySelector(selector);if(!element)throw Error("Falta el campo de reservas "+selector);return element};
  const service=requireField("#booking-service"),staff=requireField("#booking-staff"),date=requireField("#booking-date"),time=requireField("#booking-time"),name=requireField('[name="name"]'),phone=requireField('[name="phone"]'),website=requireField('[name="website"]'),submit=requireField('[type="submit"]'),status=requireField("#booking-status"),receipt=requireField("#booking-receipt"),captcha=requireField("#booking-captcha");
- const getMode=()=>options.getMode?.()||"production",getClient=()=>options.getClient?.(),config=()=>typeof options.config==="function"?options.config():options.config||{};
- let destroyed=false,refreshSequence=0,slotSequence=0,professionals=[],slots=[],pendingRequest=null,submitted=false,submitting=false,catalogLoading=false,slotsLoading=false,token="",captchaWidget=null,captchaKey="",captchaPromise=null,lastService="",mode=getMode(),catalogRead=null,slotRead=null;
+ const getMode=()=>options.getMode?.()||"production",getClient=()=>options.getClient?.(),config=()=>typeof options.config==="function"?options.config():options.config||{},getProject=()=>options.getProject?.()||config().supabaseUrl||"";
+ let destroyed=false,refreshSequence=0,slotSequence=0,professionals=[],slots=[],pendingRequest=null,submitted=false,submitting=false,refreshQueued=false,catalogLoading=false,slotsLoading=false,token="",captchaWidget=null,captchaKey="",captchaPromise=null,lastService="",mode=getMode(),project=getProject(),catalogRead=null,slotRead=null;
  const listeners=[];
  const on=(element,event,handler)=>{element.addEventListener(event,handler);listeners.push(()=>element.removeEventListener(event,handler))};
  function message(text,error=false){status.textContent=text;status.classList.toggle("booking-error",error)}
  function setOptions(element,items,placeholder,preferred=element.value){
   const nodes=[new Option(placeholder,"")];for(const item of items)nodes.push(new Option(item.name,item.id));element.replaceChildren(...nodes);if(items.some(item=>item.id===preferred))element.value=preferred;
  }
+ function formFields(){return requestFields({name:name.value,phone:phone.value,service_id:service.value,staff_id:staff.value,date:date.value,time:time.value,website:website.value},{demo:getMode()==="demo"})}
+ function selectedRetry(){
+  if(!pendingRequest?.uncertain)return false;
+  try{return pendingRequest.signature===JSON.stringify(formFields())}catch{return false}
+ }
+ function retryOption(preferred){
+  if(!pendingRequest?.uncertain)return [];
+  const sent=JSON.parse(pendingRequest.signature);
+  return sent.service_id===service.value&&sent.staff_id===staff.value&&sent.date===date.value&&sent.time===preferred?[{id:preferred,name:preferred+" · Recuperar solicitud enviada"}]:[];
+ }
  function updateButton(){
   service.disabled=submitting;staff.disabled=submitting||catalogLoading;date.disabled=submitting;time.disabled=submitting||slotsLoading;name.disabled=submitting;phone.disabled=submitting;
   const production=getMode()!=="demo";
-  submit.disabled=submitting||submitted||catalogLoading||slotsLoading||!service.value||!staff.value||!date.value||!slots.some(slot=>slot.start_time===time.value)||(production&&(!getClient()||!token||!config().bookingTurnstileSiteKey));
+  submit.disabled=submitting||submitted||catalogLoading||slotsLoading||!service.value||!staff.value||!date.value||(!slots.some(slot=>slot.start_time===time.value)&&!selectedRetry())||(production&&(!getClient()||!token||!config().bookingTurnstileSiteKey));
   submit.textContent=submitting?"ENVIANDO SOLICITUD…":getMode()==="demo"?"SIMULAR SOLICITUD · DEMO":"SOLICITAR TURNO";
  }
  function resetCaptcha(){token="";if(captchaWidget!==null){try{root.turnstile?.reset(captchaWidget)}catch{}}updateButton()}
@@ -117,15 +127,20 @@ function init(options){
     const {data,error}=await activeClient.rpc("available_slots",{p_staff_id:staff.value,p_service_id:service.value,p_date:date.value}).abortSignal(slotRead.signal);if(error)throw error;result=normalizeSlots(data);
    }
    if(destroyed||sequence!==slotSequence||selection!==currentSelection()||activeMode!==getMode()||activeMode!=="demo"&&activeClient!==getClient())return;
-   slots=result;setOptions(time,slots.map(slot=>({id:slot.start_time,name:slot.start_time+" a "+slot.end_time})),slots.length?"Elegí un horario disponible":"No hay horarios disponibles",preferred);
+   slots=result;const choices=slots.map(slot=>({id:slot.start_time,name:slot.start_time+" a "+slot.end_time}));
+   // An accepted request can occupy its own slot after its response was lost.
+   // Keep that exact payload retryable; PostgreSQL still decides idempotence.
+   if(!choices.some(item=>item.id===preferred))choices.push(...retryOption(preferred));
+   setOptions(time,choices,choices.length?"Elegí un horario disponible":"No hay horarios disponibles",preferred);
    message(activeMode==="demo"?"DEMO: disponibilidad simulada. La prueba no envía solicitudes reales.":!config().bookingTurnstileSiteKey?"Las solicitudes online todavía no están habilitadas. Consultá al salón por WhatsApp.":slots.length?"Horarios en America/Asuncion. La solicitud quedará pendiente hasta que el salón la confirme.":"No hay horarios para esa combinación. Elegí otra fecha o profesional.");
-  }catch(error){if(!destroyed&&sequence===slotSequence){slots=[];setOptions(time,[],"Disponibilidad no verificada");message("No se pudo verificar la disponibilidad. Elegí otra fecha o volvé a intentar.",true)}}
+   if(selectedRetry())message("La recepción sigue sin verificar. Reintentá sin cambiar los datos. Referencia de reintento: "+pendingRequest.id,true);
+  }catch(error){if(!destroyed&&sequence===slotSequence){slots=[];setOptions(time,retryOption(preferred),"Disponibilidad no verificada",preferred);message(selectedRetry()?"No se pudo consultar disponibilidad. Podés recuperar la misma solicitud con su referencia: "+pendingRequest.id:"No se pudo verificar la disponibilidad. Elegí otra fecha o volvé a intentar.",true)}}
   finally{if(!destroyed&&sequence===slotSequence){slotsLoading=false;time.disabled=false;updateButton()}}
  }
  async function refresh(){
-  if(destroyed)return;const sequence=++refreshSequence,activeMode=getMode(),activeClient=getClient();
+  if(destroyed)return;if(submitting){refreshQueued=true;return}const sequence=++refreshSequence,activeMode=getMode(),activeClient=getClient();
   catalogRead?.abort();slotRead?.abort();catalogRead=new AbortController();slotSequence++;
-  if(mode!==activeMode){mode=activeMode;pendingRequest=null;submitted=false;receipt.hidden=true;token="";professionals=[];slots=[];if(captchaWidget!==null){try{root.turnstile?.remove(captchaWidget)}catch{}captchaWidget=null}}
+  if(mode!==activeMode||project!==getProject()){mode=activeMode;project=getProject();pendingRequest=null;submitted=false;receipt.hidden=true;name.value="";phone.value="";token="";professionals=[];slots=[];if(captchaWidget!==null){try{root.turnstile?.remove(captchaWidget)}catch{}captchaWidget=null}}
   const services=(options.getServices?.()||[]).filter(item=>item.active!==false);
   setOptions(service,services,"Seleccioná un servicio",service.value||lastService);lastService=service.value;
   const today=businessDate();date.min=today;date.max=plusDays(today,90);if(!date.value)date.value=plusDays(today,1);
@@ -158,23 +173,25 @@ function init(options){
   event.preventDefault();if(submitting||submitted||destroyed)return;
   if(!form.reportValidity())return;
   const activeMode=getMode(),activeClient=getClient();let fields;
-  try{fields=requestFields({name:name.value,phone:phone.value,service_id:service.value,staff_id:staff.value,date:date.value,time:time.value,website:website.value},{demo:activeMode==="demo"});if(!slots.some(slot=>slot.start_time===fields.time))throw Error("Elegí un horario verificado.");if(activeMode!=="demo"&&(!activeClient||!token||!config().bookingTurnstileSiteKey))throw Error("Completá la verificación antes de solicitar el turno.")}
+  try{fields=formFields();if(!slots.some(slot=>slot.start_time===fields.time)&&!selectedRetry())throw Error("Elegí un horario verificado.");if(activeMode!=="demo"&&(!activeClient||!token||!config().bookingTurnstileSiteKey))throw Error("Completá la verificación antes de solicitar el turno.")}
   catch(error){message(error.message,true);return}
   const captchaToken=token;pendingRequest=requestIdentity(pendingRequest,fields);const requestId=pendingRequest.id;
-  submitting=true;message(activeMode==="demo"?"Preparando simulación…":"Enviando solicitud. Esperá la referencia antes de repetirla.");updateButton();
+  submitting=true;receipt.hidden=true;message(activeMode==="demo"?"Preparando simulación…":"Enviando solicitud. Esperá la referencia antes de repetirla.");updateButton();
   try{
    if(activeMode==="demo"){
     if(options.createDemoBooking)await options.createDemoBooking({request_id:requestId,...fields});
     if(destroyed||getMode()!=="demo")return;
     showReceipt(fields,"DEMO-"+requestId,true);submitted=true;message("Simulación completada. No se enviaron datos al salón.");return;
    }
+   pendingRequest.uncertain=true;
    const {data,error}=await activeClient.functions.invoke("booking",{body:{request_id:requestId,...fields,captcha_token:captchaToken},timeout:20000});
    if(destroyed||activeMode!==getMode()||activeClient!==getClient())return;
-   if(error){const code=error.context?.status||0;if(code===409){message("Ese horario ya no está disponible. Elegí otro; no se confirmó una cita.",true);await loadSlots();time.value="";throw Error("El horario cambió. Elegí uno disponible y completá nuevamente la verificación.")}if(code===429)throw Error("Se alcanzó el límite de solicitudes. Esperá 10 minutos antes de volver a intentar.");if(code===400)throw Error("No se pudo validar la solicitud. Revisá los datos y completá nuevamente la verificación.");throw Error("No se pudo confirmar la recepción. Podés reintentar la misma solicitud sin cambiar los datos; se conservará su referencia para evitar duplicados.")}
-   if(data?.reference!==requestId||data?.status!=="pendiente")throw Error("No se pudo verificar la recepción. Conservamos la referencia para reintentar sin duplicar la solicitud.");
+   if(error){const code=error.context?.status||0;pendingRequest.uncertain=![400,403,409,429].includes(code);if(code===409){message("Ese horario ya no está disponible. Elegí otro; no se confirmó una cita.",true);await loadSlots();time.value="";throw Error("El horario cambió. Elegí uno disponible y completá nuevamente la verificación.")}if(code===429)throw Error("Se alcanzó el límite de solicitudes. Esperá 10 minutos antes de volver a intentar.");if(code===400)throw Error("No se pudo validar la solicitud. Revisá los datos y completá nuevamente la verificación.");if(code===403)throw Error("Las solicitudes desde este sitio no están habilitadas. Consultá al salón por WhatsApp.");throw Error("No se pudo confirmar la recepción. Reintentá sin cambiar los datos para evitar duplicados. Referencia de reintento: "+requestId)}
+   if(data?.reference!==requestId||data?.status!=="pendiente"){pendingRequest.uncertain=true;throw Error("No se pudo verificar la recepción. Reintentá sin cambiar los datos. Referencia de reintento: "+requestId)}
+   pendingRequest.uncertain=false;
    showReceipt(fields,data.reference,false);submitted=true;message("Solicitud recibida y pendiente. El salón debe confirmar la cita.");
-  }catch(error){if(!destroyed&&activeMode===getMode())message(error.message,true)}
-  finally{if(!destroyed){submitting=false;if(activeMode!=="demo")resetCaptcha();updateButton()}}
+  }catch(error){if(!destroyed&&activeMode===getMode())message(pendingRequest?.uncertain&&!String(error.message).includes(requestId)?"No se pudo confirmar la recepción. Reintentá sin cambiar los datos. Referencia de reintento: "+requestId:error.message,true)}
+  finally{if(!destroyed){submitting=false;if(activeMode!=="demo")resetCaptcha();updateButton();if(refreshQueued){refreshQueued=false;await refresh()}}}
  }
  function invalidateReceipt(){if(submitting)return;submitted=false;receipt.hidden=true;updateButton()}
  on(form,"submit",send);

@@ -9,15 +9,23 @@ metadatos editables por el usuario.
 
 | Identidad | Lecturas | Escrituras |
 | --- | --- | --- |
-| Anónimo | Servicios activos | Ninguna administrativa |
-| Cuenta sin perfil | Servicios activos | Ninguna administrativa |
-| stylist | Perfil propio, servicios/equipo y agenda asignada | Ninguna administrativa |
+| Anónimo | Servicios activos, profesionales publicados y horarios libres mediante RPC limitadas | Ninguna administrativa; solicitud solo mediante función protegida |
+| Cuenta sin perfil | Mismo catálogo público; ninguna información administrativa | Ninguna administrativa |
+| stylist | Perfil propio, servicios/equipo, agenda y configuración horaria propia, cierres compartidos | Ninguna administrativa |
 | manager | Datos administrativos permitidos por RLS | Gestión y RPC, sin asignar roles |
 | owner | Datos administrativos permitidos por RLS | Gestión y RPC; roles mediante operación administrativa autorizada |
 
 La asignación inicial y cambios de roles se realizan mediante conexión
 administrativa del propietario, no desde el panel común. `staff_id` vincula
 stylist a su profesional; sin vínculo no obtiene una agenda ajena.
+
+En Fase 2 `request_booking` solo concede EXECUTE al backend `service_role`.
+La Edge Function pública opera con `verify_jwt=false` para recibir solicitudes
+sin registro; exige origen exacto, CAPTCHA válido, entrada limitada y límites
+persistentes. No concede acceso a tablas privadas al visitante. Su recibo solo
+expone referencia/estado pendiente. La auditoría de citas es de solo lectura
+para owner/manager; cancelar conserva el historial y DELETE de citas se revoca.
+Ver [AGENDA_FASE_2.md](AGENDA_FASE_2.md) para secretos y contrato completo.
 
 Ventas y movimientos no se insertan, actualizan ni eliminan directamente desde
 el navegador. Las RPC autorizan, validan y bloquean el producto para modificar
@@ -63,8 +71,8 @@ Revisar restricciones heredadas en [OPERACION.md](OPERACION.md).
    X-Content-Type-Options, Referrer-Policy y HSTS para Netlify. Los tests locales
    no certifican que un sitio Netlify no desplegado ya las haya aplicado.
 5. Auditar permisos/políticas externos a las migraciones: una política permisiva
-   adicional puede abrir acceso. No crear accesos anónimos para compensar
-   funciones de agenda aún pendientes.
+   adicional puede abrir acceso. Mantener las escrituras de reservas públicas
+   dentro de la función protegida; no abrir tablas ni la RPC privada a anon.
 6. Definir acceso/exportación de teléfonos/notas, retención y privacidad.
 
 ## Incidentes y operaciones ambiguas

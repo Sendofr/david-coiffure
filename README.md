@@ -2,7 +2,7 @@
 
 Plataforma existente para David Coiffure, Encarnación. Se conserva la identidad
 negro, marfil y champagne y el despliegue estático. Fase 1 aporta seguridad y esta
-rama prepara la agenda de Fase 2. Netlify sigue como hosting definitivo; Vercel se reserva
+rama integra la agenda de Fase 2 para validación local. Netlify sigue como hosting definitivo; Vercel se reserva
 a pruebas. No declara disponibilidad comercial.
 
 ## Ejecutar y comprobar
@@ -15,6 +15,7 @@ npm run build
 npm run check
 npm test
 npm run test:db
+npm run test:db:agenda
 npm run test:integration
 npx playwright install --with-deps chromium
 npm run test:browser
@@ -65,6 +66,7 @@ resultados incompletos como definitivos. Ver el alcance de concurrencia en
 - [Conciliar migraciones ejecutadas desde SQL Editor](docs/MIGRACIONES.md).
 - [Informe de revisión de Fase 1](docs/REVISION_FASE_1.md).
 - [Agenda Fase 2, Supabase y Vercel Preview](docs/AGENDA_FASE_2.md).
+- [Resultados locales y pendientes externos de Fase 2](docs/VALIDACION_FASE_2.md).
 
 `supabase/migrations/` contiene el procedimiento versionado, incluida la base
 original. `supabase/schema.sql` bloquea su ejecución y dirige a las migraciones;

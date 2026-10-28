@@ -11,9 +11,18 @@ const valid = { mode: 'production', supabaseUrl: 'https://test-project.supabase.
 const jwt = role => 'eyJhbGciOiJIUzI1NiJ9.' + Buffer.from(JSON.stringify({ role })).toString('base64url') + '.test-signature';
 
 test('configuration generation allowlists public variables only', () => {
-  const actual = publicConfig({ ...{ DAVID_MODE: 'production', SUPABASE_URL: valid.supabaseUrl, SUPABASE_PUBLISHABLE_KEY: valid.supabasePublishableKey }, PRIVATE_TOKEN: 'must-not-appear', SUPABASE_SERVICE_ROLE_KEY: 'must-not-appear' });
-  assert.deepEqual(actual, valid);
+  const siteKey = '0x4AAAAAAA_public_widget_site_key';
+  const actual = publicConfig({ ...{ DAVID_MODE: 'production', SUPABASE_URL: valid.supabaseUrl, SUPABASE_PUBLISHABLE_KEY: valid.supabasePublishableKey, BOOKING_TURNSTILE_SITE_KEY: siteKey }, PRIVATE_TOKEN: 'must-not-appear', SUPABASE_SERVICE_ROLE_KEY: 'must-not-appear', TURNSTILE_SECRET_KEY: 'must-not-appear', BOOKING_RATE_SECRET: 'must-not-appear', BOOKING_ALLOWED_ORIGINS: 'must-not-appear' });
+  assert.deepEqual(actual, { ...valid, bookingTurnstileSiteKey: siteKey });
   assert.doesNotMatch(JSON.stringify(actual), /must-not-appear|PRIVATE_TOKEN|SERVICE_ROLE/);
+});
+test('optional public CAPTCHA configuration cannot emit script markup or private configuration', () => {
+  const env = { DAVID_MODE: 'production', SUPABASE_URL: valid.supabaseUrl, SUPABASE_PUBLISHABLE_KEY: valid.supabasePublishableKey };
+  assert.equal(publicConfig(env).bookingTurnstileSiteKey, '', 'Missing widget configuration leaves booking disabled without breaking staff Auth');
+  for (const key of ['<script>alert(1)</script>', 'https://evil.test/widget', 'x'.repeat(101), 'short', 'invalid\nwidget\nkey']) {
+    assert.throws(() => publicConfig({ ...env, BOOKING_TURNSTILE_SITE_KEY: key }), /BOOKING_TURNSTILE_SITE_KEY/);
+  }
+  assert.equal(publicConfig({ ...env, BOOKING_TURNSTILE_SITE_KEY: '  0x4AAAAAAA_public_widget_site_key  ' }).bookingTurnstileSiteKey, '0x4AAAAAAA_public_widget_site_key');
 });
 test('demo is explicit and needs no credentials', () => {
   assert.equal(publicConfig({}).mode, 'demo');
@@ -26,6 +35,12 @@ test('Netlify requires an explicit mode and refuses local production endpoints',
   assert.equal(publicConfig({ NETLIFY: 'true', DAVID_MODE: 'demo' }).mode, 'demo');
   assert.throws(() => publicConfig({ NETLIFY: 'true', DAVID_MODE: 'production', SUPABASE_URL: 'http://127.0.0.1:54321', SUPABASE_PUBLISHABLE_KEY: valid.supabasePublishableKey }), /HTTPS/);
   assert.equal(publicConfig({ NETLIFY: 'true', DAVID_MODE: 'production', SUPABASE_URL: valid.supabaseUrl, SUPABASE_PUBLISHABLE_KEY: jwt('anon') }).mode, 'production');
+});
+test('Vercel requires an explicit mode and refuses local production endpoints', () => {
+  assert.throws(() => publicConfig({ VERCEL: '1' }), /Vercel requiere DAVID_MODE/);
+  assert.equal(publicConfig({ VERCEL: '1', DAVID_MODE: 'demo' }).mode, 'demo');
+  assert.throws(() => publicConfig({ VERCEL: '1', DAVID_MODE: 'production', SUPABASE_URL: 'http://127.0.0.1:54321', SUPABASE_PUBLISHABLE_KEY: valid.supabasePublishableKey }), /HTTPS/);
+  assert.equal(publicConfig({ VERCEL: '1', DAVID_MODE: 'production', SUPABASE_URL: valid.supabaseUrl, SUPABASE_PUBLISHABLE_KEY: jwt('anon') }).mode, 'production');
 });
 test('production missing either public setting fails closed', () => {
   for (const config of [{ mode: 'production' }, { ...valid, supabaseUrl: '' }, { ...valid, supabasePublishableKey: '' }, { mode: 'typo' }]) {
@@ -74,10 +89,13 @@ test('config command emits a static public artifact and invalid production prese
   const script = resolve('scripts/build-config.cjs');
   mkdirSync(join(directory, 'dist'));
   try {
-    const generated = spawnSync(process.execPath, [script], { cwd: directory, env: { DAVID_MODE: 'production', SUPABASE_URL: valid.supabaseUrl, SUPABASE_PUBLISHABLE_KEY: valid.supabasePublishableKey }, encoding: 'utf8' });
+    const siteKey = '0x4AAAAAAA_public_widget_site_key';
+    const generated = spawnSync(process.execPath, [script], { cwd: directory, env: { DAVID_MODE: 'production', SUPABASE_URL: valid.supabaseUrl, SUPABASE_PUBLISHABLE_KEY: valid.supabasePublishableKey, BOOKING_TURNSTILE_SITE_KEY: siteKey, TURNSTILE_SECRET_KEY: 'must-stay-private', BOOKING_RATE_SECRET: 'must-stay-private', SUPABASE_SERVICE_ROLE_KEY: 'must-stay-private' }, encoding: 'utf8' });
     assert.equal(generated.status, 0, generated.stderr);
     const contents = readFileSync(join(directory, 'dist/config.js'), 'utf8');
     assert.ok(contents.includes(valid.supabaseUrl));
+    assert.ok(contents.includes(siteKey));
+    assert.doesNotMatch(contents, /must-stay-private|SECRET_KEY|SERVICE_ROLE|BOOKING_RATE_SECRET/);
     const failed = spawnSync(process.execPath, [script], { cwd: directory, env: { DAVID_MODE: 'production' }, encoding: 'utf8' });
     assert.equal(failed.status, 1);
     assert.equal(readFileSync(join(directory, 'dist/config.js'), 'utf8'), contents);

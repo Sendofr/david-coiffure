@@ -9,6 +9,41 @@ No se despliega desde esta revisión ni se modifica el proyecto real. Las
 instrucciones remotas siguientes quedan preparadas para el propietario y
 requieren autorización separada, primero en un entorno de ensayo.
 
+La integración del HTML, los módulos y la configuración continúa desde el
+checkpoint `e4a7fa2`, sin reemplazarlo. Consultar los resultados ejecutados y los
+límites de la verificación local en [VALIDACION_FASE_2.md](VALIDACION_FASE_2.md).
+
+## Comprobar localmente
+
+Usar Node 24, Python 3 y Docker. Ninguno de estos comandos enlaza un proyecto
+Supabase alojado; los runners crean y eliminan contenedores con nombres únicos.
+
+```sh
+npm ci
+npm run build
+npm run check
+npm test
+npx playwright install --with-deps chromium
+npm run test:browser
+npm run test:db
+npm run test:db:agenda
+npm run test:integration
+```
+
+Si Chromium ya está instalado, puede seleccionarse con
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium` al ejecutar las pruebas.
+`test:integration` recorre el navegador, el SDK oficial, Auth, PostgREST, la
+función de reservas y PostgreSQL locales. Solo el widget/proveedor externo de
+Turnstile se sustituye desde el runner; la aplicación y la función conservan sus
+controles. No prueba el gateway ni las credenciales de un Supabase alojado.
+
+Para explorar el diseño manualmente, generar configuración pública **demo** con
+variables de entorno explícitas y ejecutar `npm run dev`. `build:config` carga
+el `.env` local si existe: revisar sus variables antes de usarlo y no publicar
+el artefacto resultante sin revisar el modo. En demo solo ingresar datos ficticios;
+su disponibilidad ilustrativa no es la agenda del salón. Los tests aíslan su
+configuración de la del propietario y no dependen de ese `.env`.
+
 ## Qué representa una reserva
 
 El visitante elige servicio, profesional publicado, fecha y un horario calculado
@@ -228,7 +263,7 @@ recursos faltantes en HTML con estado 200.
 - Fase 3 permanece fuera de alcance: no se atribuyen a este trabajo caja,
   idempotencia de ventas ni reversos financieros.
 
-El criterio de cierre es evidencia ejecutable de permisos, horarios y
-concurrencia local, más la validación autorizada del preview cuando el propietario
-complete sus prerrequisitos. Ninguno de esos pasos autoriza merge o producción
+La comprobación local y la validación alojada son hitos distintos. Antes de
+activar reservas reales se necesita el ensayo autorizado con CAPTCHA y gateway
+reales descrito arriba. Ninguno de esos pasos autoriza merge o producción
 automáticos.

@@ -10,7 +10,7 @@ permissions:
 jobs:
   validar:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,9 +26,11 @@ jobs:
           DAVID_MODE: demo
           SUPABASE_URL: ''
           SUPABASE_PUBLISHABLE_KEY: ''
+          BOOKING_TURNSTILE_SITE_KEY: ''
       - run: npm run check
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - run: npm run test:db
+      - run: npm run test:db:agenda
       - run: npm run test:integration
