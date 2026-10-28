@@ -1,0 +1,9 @@
+[build]
+  command = "npm run build && npm run build:config"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "24"
+
+# Security headers live in dist/_headers so manual dist uploads receive them too.
+# No SPA fallback: unknown paths and missing assets should remain genuine 404s.

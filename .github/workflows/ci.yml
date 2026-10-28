@@ -1,0 +1,34 @@
+name: Calidad y permisos
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Generate explicit public Netlify demo configuration
+        run: npm run build:config
+        env:
+          NETLIFY: 'true'
+          DAVID_MODE: demo
+          SUPABASE_URL: ''
+          SUPABASE_PUBLISHABLE_KEY: ''
+      - run: npm run check
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:db
+      - run: npm run test:integration
