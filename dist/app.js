@@ -56,6 +56,7 @@ const persist=()=>{if(!isLive())localStorage.setItem(demoKey,JSON.stringify(stat
 let page="dashboard",search="",filter="todos",userProfile=null,reportMonth=today().slice(0,7);
 let session=null,client=null,authSubscription=null,generation=0,loadSequence=0,loading=false,liveError="";
 let clientReady=Promise.resolve();
+let agenda=null,bookingWidget=null,agendaRefreshInFlight=false;
 let financialReport=null,financialError="",financialBusy=false,financialSequence=0,collectionSequence=0;
 let dataReads=new AbortController();
 // Discard the legacy hand-rolled session; the SDK owns refresh and storage.
@@ -66,7 +67,7 @@ async function submitOnce(form,action){
  pendingForms.add(form);const buttons=[...form.querySelectorAll('button[type="submit"]')];buttons.forEach(b=>b.disabled=true);
  try{return await action()}finally{pendingForms.delete(form);buttons.forEach(b=>b.disabled=false)}
 }
-function clearPrivateState(){dataReads.abort();dataReads=new AbortController();financialSequence++;collectionSequence++;financialReport=null;financialBusy=false;financialError="";generation++;loadSequence++;state=emptyState();userProfile=null;loading=false;page="dashboard";search="";closeModal()}
+function clearPrivateState(){agenda?.reset();dataReads.abort();dataReads=new AbortController();financialSequence++;collectionSequence++;financialReport=null;financialBusy=false;financialError="";generation++;loadSequence++;state=emptyState();userProfile=null;loading=false;page="dashboard";search="";closeModal()}
 const toast=msg=>{const t=$("#toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3100)};
 const modal=(title,body)=>{$("#modal-title").textContent=title;$("#modal-body").innerHTML=body;$("#modal-backdrop").hidden=false};
 const closeModal=()=>{$("#modal-backdrop").hidden=true;$("#modal-body").innerHTML=""};
@@ -80,27 +81,12 @@ function publicServices(){
  const catalog=isLive()?publicCatalog:state.services;
  const grid=$("#service-grid");const items=catalog.filter(s=>s.active!==false).slice(0,6);
  grid.innerHTML=items.map((s,i)=>'<a class="service-tile" href="#reservar" style="--photo:url(&quot;'+serviceImages[i%serviceImages.length]+'&quot;)"><small>0'+(i+1)+' / '+escapeHTML(s.category||"ESTILO")+'</small><h3>'+escapeHTML(s.name)+'</h3><div class="tile-bottom"><span>CONSULTAR SERVICIO</span><span class="round-arrow">↗</span></div></a>').join("");
+ const selection=$("#booking-service").value;
  $("#booking-service").innerHTML='<option value="">Seleccioná un servicio</option>'+catalog.filter(s=>s.active!==false).map(s=>'<option value="'+escapeHTML(s.id)+'">'+escapeHTML(s.name)+'</option>').join("");
+ if(catalog.some(s=>s.id===selection))$("#booking-service").value=selection;
+ bookingWidget?.refresh();
 }
-const dateField=$("#booking-date");dateField.min=today();dateField.value=addDays(1);
-function updateTimeOptions(){
- const date=new Date(dateField.value+"T12:00:00");
- const day=date.getDay();const sel=$("#booking-time");
- if(!dateField.value||day===0){sel.innerHTML='<option value="">Sin horarios publicados para domingo</option>';return}
- let start=day===6?10:13;
- const opts=[];for(let hour=start;hour<20;hour++)for(let min of [0,30])opts.push(String(hour).padStart(2,"0")+":"+String(min).padStart(2,"0"));
- sel.innerHTML='<option value="">Elegí un horario de preferencia</option>'+opts.map(t=>'<option value="'+t+'">'+t+' hs</option>').join("");
-}
-dateField.onchange=updateTimeOptions;updateTimeOptions();publicServices();
-$("#booking-form").onsubmit=e=>{
- e.preventDefault();const f=new FormData(e.currentTarget),s=(isLive()?publicCatalog:state.services).find(x=>x.id===f.get("service"));
- if(!s)return toast("Seleccioná un servicio");
- const lines=["Hola David Coiffure, quisiera consultar disponibilidad para un turno.","Servicio: "+s.name,"Fecha: "+fmtDate(f.get("date")),"Horario de preferencia: "+f.get("time")+" hs","Nombre: "+f.get("name"),"Teléfono: "+f.get("phone")];
- if(f.get("notes"))lines.push("Observaciones: "+f.get("notes"));
- lines.push("Sé que la reserva está sujeta a confirmación. ¡Gracias!");
- window.open("https://wa.me/595985499769?text="+encodeURIComponent(lines.join("\n")),"_blank","noopener");
- toast("Se abrió WhatsApp para enviar tu solicitud.");
-};
+publicServices();
 const icons={dashboard:"▦",appointments:"▣",clients:"♙",services:"✦",inventory:"▤",movements:"⇄",sales:"◈",expenses:"−",profits:"▥",staff:"♧",settings:"⚙"};
 const navItems=[["dashboard","Resumen"],["appointments","Agenda"],["clients","Clientes"],["services","Servicios"],["inventory","Inventario"],["movements","Movimientos"],["sales","Ventas"],["expenses","Gastos"],["profits","Ganancias"],["staff","Equipo"],["settings","Configuración"]];
 const canWrite=()=>!isLive()||["owner","manager"].includes(userProfile?.role);
@@ -180,8 +166,7 @@ function toolbar(withFilter=false){
  return '<div class="toolbar"><input class="search-input" id="data-search" placeholder="⌕  Buscar..." value="'+escapeHTML(search)+'"/>'+(withFilter?'<div class="filter-tabs">'+["todos","Consumible","Venta"].map(x=>'<button data-filter="'+x+'" class="'+(filter===x?"active":"")+'">'+x+'</button>').join("")+'</div>':"")+'</div>';
 }
 function renderAppointments(){
- const rows=state.appointments.filter(a=>(a.client_name+" "+serviceName(a.service_id)+" "+a.appointment_date).toLowerCase().includes(search.toLowerCase())).sort((a,b)=>(b.appointment_date+b.start_time).localeCompare(a.appointment_date+a.start_time)).map(a=>'<tr>'+td(fmtDate(a.appointment_date)+" · "+escapeHTML(a.start_time),"strong-cell")+td(escapeHTML(a.client_name)+"<br/><small>"+escapeHTML(a.client_phone)+"</small>")+td(escapeHTML(serviceName(a.service_id)))+td(escapeHTML(staffName(a.staff_id)))+td(status(a.status))+td('<button class="tiny-btn" data-edit="appointments" data-id="'+escapeHTML(a.id)+'">Editar</button>')+'</tr>');
- return title("Agenda de turnos","Organizá las citas y mantené actualizado su estado.","Nuevo turno","new-appointments")+toolbar()+panel("Agenda",rows.length?table(["FECHA / HORA","CLIENTE","SERVICIO","PROFESIONAL","ESTADO",""],rows):'<div class="empty">No encontramos turnos. Probá crear uno nuevo.</div>',state.appointments.length+" registros");
+ return agenda?agenda.render():title("Agenda","Preparando calendario…");
 }
 function renderClients(){
  const rows=state.clients.filter(c=>(c.name+" "+c.phone+" "+(c.email||"")).toLowerCase().includes(search.toLowerCase())).map(c=>'<tr>'+td(escapeHTML(c.name),"strong-cell")+td(escapeHTML(c.phone))+td(escapeHTML(c.email||"—"))+td(escapeHTML(c.notes||"—"))+td('<button class="tiny-btn" data-edit="clients" data-id="'+escapeHTML(c.id)+'">Editar</button>')+'</tr>');
@@ -242,6 +227,7 @@ function renderAdmin(){
  wireActions();
 }
 function wireActions(){
+ agenda?.wire($("#admin-content"));
  $$("#admin-content [data-action]").forEach(b=>b.onclick=()=>{
  const a=b.dataset.action;
  if(a==="connect"){if(isLive())clientReady.then(()=>loadLive(true));else connectionDialog()}
@@ -289,11 +275,12 @@ function editDialog(type,recordId){
  e.preventDefault();if(pendingForms.has(e.currentTarget))return;const body=Object.fromEntries(new FormData(e.currentTarget).entries());
  if(type==="appointments"){
  const s=state.services.find(x=>x.id===body.service_id);
+ if(!body.staff_id&&["pendiente","confirmado","en-proceso"].includes(body.status)){toast("Seleccioná un profesional con disponibilidad configurada.");return}
  const [hh,mm]=body.start_time.split(":").map(Number);const total=hh*60+mm+Number(s?.duration_minutes||60);
  if(total>24*60){toast("El turno termina después de medianoche.");return}
  body.end_time=String(Math.floor(total/60)).padStart(2,"0")+":"+String(total%60).padStart(2,"0");
  if(!body.staff_id)body.staff_id=null;
- const overlap=state.appointments.some(a=>a.id!==recordId&&a.staff_id&&a.staff_id===body.staff_id&&a.appointment_date===body.appointment_date&&!["cancelado","no-asistio"].includes(a.status)&&!["cancelado","no-asistio"].includes(body.status)&&a.start_time<body.end_time&&a.end_time>body.start_time);
+ const overlap=state.appointments.some(a=>a.id!==recordId&&a.staff_id&&a.staff_id===body.staff_id&&a.appointment_date===body.appointment_date&&["pendiente","confirmado","en-proceso"].includes(a.status)&&["pendiente","confirmado","en-proceso"].includes(body.status)&&a.start_time<body.end_time&&a.end_time>body.start_time);
  if(overlap){toast("Hay otro turno del profesional en ese horario.");return}
  }
  if(type==="products"){
@@ -385,6 +372,7 @@ async function saveRecord(type,recordId,body){
   if(!userProfile||!["owner","manager"].includes(userProfile.role))throw Error("Tu usuario no tiene permiso para modificar estos datos.");
   const route=type+(recordId?"?id=eq."+encodeURIComponent(recordId):"");
   await apiRequest(route,recordId?"PATCH":"POST",body);
+  if(type==="appointments"){await refreshAgenda();return}
   await fetchCollections();if(type==="services")await loadPublicCatalog();return;
  }
  if(recordId){const idx=state[type].findIndex(x=>String(x.id)===String(recordId));state[type][idx]={...state[type][idx],...body}}
@@ -439,6 +427,25 @@ async function fetchCollections(){
   if(userProfile?.role!=="stylist")await refreshFinancialReport();
  }catch(error){if(token===generation&&sequence===collectionSequence){clearPrivateState();liveError="No se pudieron actualizar los datos. Comprobá la conexión y volvé a ingresar. Si guardaste una operación, verificá su historial antes de repetirla.";renderAdmin()}throw error}
 }
+async function refreshAgenda(){
+ if(!isLive()){renderAdmin();return}
+ if(agendaRefreshInFlight||!client||!userProfile)return;
+ const token=generation,activeClient=client;
+ agendaRefreshInFlight=true;
+ try{
+  const profiles=await apiRequest("profiles?select=id,role,display_name,staff_id&id=eq."+encodeURIComponent(userProfile.id));
+  if(token!==generation)return;
+  const profile=profiles?.[0];
+  if(!profile)throw Error("Tu cuenta ya no tiene acceso a la agenda.");
+  if(profile.role!==userProfile.role||profile.staff_id!==userProfile.staff_id){clearPrivateState();await loadLive();return}
+  const appointments=await window.DavidPagination.fetchAll(activeClient,"appointments",{signal:dataReads.signal});
+  if(token!==generation||activeClient!==client)return;
+  state={...state,appointments};renderAdmin();
+ }catch(error){
+  if(token===generation){clearPrivateState();liveError="No se pudo verificar la agenda. Actualizá el acceso y comprobá la conexión.";renderAdmin()}
+  throw error;
+ }finally{agendaRefreshInFlight=false}
+}
 async function loadLive(promptLogin=false){
  if(!isLive())return;
  if(settings.error||!client){liveError=settings.error||"No se pudo iniciar Supabase.";renderAdmin();return}
@@ -484,6 +491,7 @@ async function initializeClient(){
   const {data,error}=await client.auth.getSession();if(error)throw error;
   if(client!==activeClient)return;
   session=data.session;
+  bookingWidget?.refresh();
   loadPublicCatalog().catch(()=>{publicCatalog=[];publicServices()});
  }catch(error){liveError=error.message;publicCatalog=[];publicServices();renderAdmin()}
 }
@@ -532,5 +540,35 @@ async function logout(){
  finally{if(storageKey){sessionStorage.removeItem(storageKey);sessionStorage.removeItem(storageKey+"-logout")}}
  if(isLive()){clientReady=initializeClient();await clientReady;connectionDialog("login")}
 }
+agenda=window.DavidAgenda.create({
+ getState:()=>state,canWrite,getProfile:()=>userProfile,isLive,
+ apiClient:()=>client,toast,modal,closeModal,escapeHTML,
+ onRender:()=>renderAdmin(),refresh:refreshAgenda,
+ openEdit:recordId=>editDialog("appointments",recordId),
+ saveAppointment:async(recordId,body)=>{
+  if(isLive()){
+   if(!userProfile||!canWrite())throw Error("No tenés permiso para cambiar turnos.");
+   await apiRequest("appointments?id=eq."+encodeURIComponent(recordId),"PATCH",body);
+  }else{await saveRecord("appointments",recordId,body)}
+ }
+});
+bookingWidget=window.DavidBooking.init({
+ getClient:()=>client,getMode:()=>settings.mode,getServices:()=>isLive()?publicCatalog:state.services,
+ getDemoStaff:()=>state.staff,getDemoAppointments:()=>state.appointments,
+ config:()=>window.DAVID_CONFIG,
+ createDemoBooking:async fields=>{
+  if(isLive())throw Error("No se puede guardar una reserva real en la demostración.");
+  const service=state.services.find(s=>s.id===fields.service_id),professional=state.staff.find(p=>p.id===fields.staff_id);
+  if(!service||!professional)throw Error("Seleccioná un servicio y profesional de demostración.");
+  const minutes=Number(fields.time.slice(0,2))*60+Number(fields.time.slice(3,5))+Number(service.duration_minutes);
+  const end=String(Math.floor(minutes/60)).padStart(2,"0")+":"+String(minutes%60).padStart(2,"0");
+  if(state.appointments.some(a=>a.staff_id===fields.staff_id&&a.appointment_date===fields.date&&["pendiente","confirmado","en-proceso"].includes(a.status)&&a.start_time<end&&a.end_time>fields.time))throw Error("Ese horario demo ya está ocupado.");
+  if(!state.appointments.some(a=>a.id===fields.request_id))state.appointments.push({id:fields.request_id,client_name:fields.name,client_phone:fields.phone,staff_id:fields.staff_id,service_id:fields.service_id,appointment_date:fields.date,start_time:fields.time,end_time:end,status:"pendiente",notes:"Solicitud ficticia desde la demostración"});
+  persist();return {reference:fields.request_id,status:"pendiente"};
+ }
+});
 clientReady=initializeClient();
+setInterval(()=>{
+ if(isLive()&&userProfile&&!loading&&!$("#admin-view").hidden&&page==="appointments"&&document.visibilityState==="visible")refreshAgenda().catch(()=>{});
+},30000);
 })();

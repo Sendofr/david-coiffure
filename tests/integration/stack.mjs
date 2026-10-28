@@ -15,7 +15,7 @@ function docker(args, input) {
   try { return execFileSync('docker', args, { input, encoding: 'utf8', timeout: 180_000, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); }
   catch (error) { throw new Error(`Docker operation ${args[0]} failed: ${String(error.stderr || error.message).slice(-2000)}`); }
 }
-export async function startStack() {
+export async function startStack({ agenda = false } = {}) {
   const prefix = `david-integration-${randomBytes(6).toString('hex')}`;
   const names = { db: `${prefix}-db`, auth: `${prefix}-auth`, rest: `${prefix}-rest` };
   const secret = randomBytes(40).toString('hex');
@@ -73,8 +73,13 @@ export async function startStack() {
     // Current PostgREST uses request.jwt.claims, as in modern Supabase PostgreSQL.
     sql(`create or replace function auth.uid() returns uuid language sql stable as
       $$ select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid $$;
+      create or replace function auth.role() returns text language sql stable as
+      $$ select current_setting('request.jwt.claims', true)::jsonb ->> 'role' $$;
       grant execute on function auth.uid() to anon, authenticated, service_role;`);
-    for (const filename of readdirSync(resolve('supabase/migrations')).filter(n => n.endsWith('.sql')).sort()) {
+    // Phase 1 fixtures intentionally retain historical appointments without
+    // scheduling rules. Agenda suites opt into every new migration explicitly.
+    for (const filename of readdirSync(resolve('supabase/migrations'))
+      .filter(n => n.endsWith('.sql') && (agenda || n <= '20261028000100_financial_report.sql')).sort()) {
       sql(readFileSync(resolve('supabase/migrations', filename), 'utf8'));
     }
     docker(['run', '--detach', '--name', names.rest, '--network', prefix,

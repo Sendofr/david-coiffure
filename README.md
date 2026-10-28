@@ -1,8 +1,8 @@
 # David Coiffure · Web y gestión del salón
 
 Plataforma existente para David Coiffure, Encarnación. Se conserva la identidad
-negro, marfil y champagne y el despliegue estático. Esta rama desarrolla el primer
-hito de seguridad y prepara Netlify como hosting definitivo; Vercel se reserva
+negro, marfil y champagne y el despliegue estático. Fase 1 aporta seguridad y esta
+rama prepara la agenda de Fase 2. Netlify sigue como hosting definitivo; Vercel se reserva
 a pruebas. No declara disponibilidad comercial.
 
 ## Ejecutar y comprobar
@@ -34,8 +34,11 @@ secretas en el navegador.
   información real de clientes.
 - **Producción:** URL/clave pública y sesión del personal; datos en Supabase y
   permisos PostgreSQL. Un fallo no activa datos ficticios como sustituto.
-- Web pública con servicios, fotografías referenciales y solicitud WhatsApp. El
-  formulario no guarda ni confirma reservas; los horarios son preferencias.
+- Web pública con servicios y fotografías referenciales. En Fase 2, la solicitud
+  usa disponibilidad del servidor y una Edge Function protegida con CAPTCHA:
+  crea un turno pendiente, nunca una confirmación automática. WhatsApp conserva
+  su función de comunicación. La integración alojada requiere configuración
+  autorizada del propietario; demo simula sin escribir datos reales.
 - Panel con agenda, clientes, servicios, equipo, inventario, movimientos, ventas
   de una línea, gastos y resultado operativo **estimado**.
 - owner/manager administran; stylist consulta su agenda asignada. Equipo y datos
@@ -61,6 +64,7 @@ resultados incompletos como definitivos. Ver el alcance de concurrencia en
 - [Netlify desde GitHub o subida manual de dist](docs/NETLIFY.md).
 - [Conciliar migraciones ejecutadas desde SQL Editor](docs/MIGRACIONES.md).
 - [Informe de revisión de Fase 1](docs/REVISION_FASE_1.md).
+- [Agenda Fase 2, Supabase y Vercel Preview](docs/AGENDA_FASE_2.md).
 
 `supabase/migrations/` contiene el procedimiento versionado, incluida la base
 original. `supabase/schema.sql` bloquea su ejecución y dirige a las migraciones;
@@ -70,8 +74,10 @@ descartable y no deben apuntar a producción.
 
 ## Límites pendientes
 
-Agenda con disponibilidad, vacaciones y solicitudes persistidas es el siguiente
-hito. Ventas múltiples, descuentos, idempotencia entre reintentos, devoluciones,
+La agenda requiere aplicar la migración y desplegar/configurar la función solo
+tras autorización en ensayo. Los pendientes bloquean el intervalo hasta revisión
+del salón; no vencen automáticamente. Ventas múltiples, descuentos, idempotencia
+de ventas entre reintentos, devoluciones,
 anulaciones auditables, caja e informes ampliados quedan pendientes. Si falla la
 red después de enviar una venta, verificar historial antes de repetirla.
 

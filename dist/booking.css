@@ -1,0 +1,12 @@
+/* Public agenda uses the existing ivory, black and champagne form. */
+.booking-form #booking-status{font-size:12px;line-height:1.7;color:#70614a;margin:0}
+.booking-form #booking-status.booking-error{color:#9a4136}
+.booking-form [type="submit"]:disabled{opacity:.6;cursor:not-allowed}
+.booking-form #booking-captcha{min-width:0;max-width:100%;overflow:hidden}
+.booking-honeypot{position:absolute!important;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#booking-receipt{padding:20px;border:1px solid #cbb893;border-radius:8px;background:#f7f2e8;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+#booking-receipt strong{font-size:15px;color:#38352c}
+#booking-receipt p{margin:12px 0}
+#booking-receipt .booking-reference{font-family:monospace;font-size:12px}
+.booking-again{display:block;margin-top:18px;border:1px solid #a69069;background:transparent;border-radius:5px;padding:10px 14px;color:#5e4e34;font:inherit;cursor:pointer}
+@media(max-width:440px){#booking-receipt{padding:15px}.booking-form #booking-captcha{width:100%}}
